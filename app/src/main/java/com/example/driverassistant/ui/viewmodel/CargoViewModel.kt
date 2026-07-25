@@ -39,6 +39,7 @@ class CargoViewModel @Inject constructor(
             _isProcessing.value = true
             try {
                 val now = System.currentTimeMillis()
+                val clientEventId = "pickup_${cargo.uuid}_$now"
                 val updated = cargo.copy(
                     status = "PICKED_UP",
                     conditionAtPickup = condition,
@@ -54,7 +55,8 @@ class CargoViewModel @Inject constructor(
                     actorId = driverName,
                     stopId = stopId,
                     timestamp = now,
-                    reason = reason
+                    reason = reason,
+                    clientEventId = clientEventId
                 ))
                 
                 // Sync with backend
@@ -63,7 +65,8 @@ class CargoViewModel @Inject constructor(
                         stopId = stopId,
                         driverName = driverName,
                         condition = condition,
-                        reason = reason
+                        reason = reason,
+                        clientEventId = clientEventId
                     ))
                 } catch (e: Exception) {
                     android.util.Log.e("CargoSync", "Failed to sync pickup", e)
@@ -81,6 +84,7 @@ class CargoViewModel @Inject constructor(
             _isProcessing.value = true
             try {
                 val now = System.currentTimeMillis()
+                val clientEventId = "deliver_${cargo.uuid}_$now"
                 val updated = cargo.copy(
                     status = "DELIVERED",
                     conditionAtDelivery = condition,
@@ -96,7 +100,8 @@ class CargoViewModel @Inject constructor(
                     actorId = driverName,
                     stopId = stopId,
                     timestamp = now,
-                    reason = reason
+                    reason = reason,
+                    clientEventId = clientEventId
                 ))
                 
                 // Sync with backend
@@ -105,7 +110,8 @@ class CargoViewModel @Inject constructor(
                         stopId = stopId,
                         driverName = driverName,
                         condition = condition,
-                        reason = reason
+                        reason = reason,
+                        clientEventId = clientEventId
                     ))
                 } catch (e: Exception) {
                     android.util.Log.e("CargoSync", "Failed to sync delivery", e)

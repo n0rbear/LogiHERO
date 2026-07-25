@@ -274,11 +274,34 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                 <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotPostal" placeholder="Irsz"><input type="text" id="tDepotCity" placeholder="Város"></div>
 
                 <h3 style="margin-top:20px;">📦 Szállítmányok</h3>
+                <div style="margin-bottom:10px; display:flex; gap:10px;">
+                    <input type="text" id="cargoSearch" placeholder="Keresés (név, S/N, ref)..." oninput="filterCargoRows()" style="flex:1;">
+                    <select id="cargoStatusFilter" onchange="filterCargoRows()" style="width:150px;">
+                        <option value="">Összes státusz</option>
+                        <option value="PLANNED">PLANNED</option>
+                        <option value="READY_FOR_PICKUP">READY</option>
+                        <option value="PICKED_UP">PICKED UP</option>
+                        <option value="DELIVERED">DELIVERED</option>
+                        <option value="DAMAGED">DAMAGED</option>
+                        <option value="MISSING">MISSING</option>
+                    </select>
+                </div>
                 <div id="modalCargo"></div>
                 <button onclick="addCargoRow()" style="background:#3498db; color:white; margin-top:10px;">+ Szállítmány</button>
 
                 <h3>Megállók</h3><div id="modalStops"></div><button onclick="addStopRow()">+ Megálló</button>
                 <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour(event)" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
+            </div>
+        </div>
+
+        <div id="cargoHistoryModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:2000; padding:50px;">
+            <div style="background:#222; padding:30px; border-radius:12px; max-width:700px; margin:auto; max-height:80vh; overflow-y:auto;">
+                <h2 id="historyTitle">Cargo történet</h2>
+                <table style="font-size:13px;">
+                    <thead><tr><th>Időpont</th><th>Esemény</th><th>Státusz váltás</th><th>Szereplő</th><th>Megjegyzés</th></tr></thead>
+                    <tbody id="cargoHistoryList"></tbody>
+                </table>
+                <div style="margin-top:20px; text-align:right;"><button onclick="document.getElementById('cargoHistoryModal').style.display='none'">Bezárás</button></div>
             </div>
         </div>
 
@@ -1441,6 +1464,7 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                 const deliveryOptions = stops.map(s => `<option value="${s.uuid}" ${c && c.delivery_stop_uuid === s.uuid ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
 
                 d.innerHTML = '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' +
+                    (c && c.id ? '<button onclick="viewCargoHistory('+c.id+')" style="position:absolute; right:40px; top:10px; background:#3498db; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">🕒</button>' : '') +
                     '<input type="hidden" class="cargo-uuid" value="' + esc(uuid) + '">' +
                     '<div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">' +
                         '<div><label>Megnevezés</label><input type="text" class="cargo-name" value="' + esc(c ? c.name : '') + '"></div>' +
@@ -1468,13 +1492,60 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                 if (!sn) return;
                 // Simple local tour duplicate check
                 const rows = Array.from(document.querySelectorAll('.cargo-edit-row'));
-                const sameTourDups = rows.filter(r => r.querySelector('.cargo-sn').value.trim() === sn);
+                const sameTourDups = rows.filter(r => r.querySelector('.cargo-sn').value.trim().toUpperCase() === sn.toUpperCase());
                 if (sameTourDups.length > 1) {
                     alert('Hiba: Ez a sorozatszám már szerepel ebben a túrában!');
                     input.style.borderColor = 'red';
                     return;
                 }
-                // Global check (API call could be added here)
+
+                // Global check
+                try {
+                    const res = await fetch('/api/check-serial?sn=' + encodeURIComponent(sn) + '&tourId=' + document.getElementById('tourId').value);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.exists) {
+                            alert('Figyelem: Ez a sorozatszám már szerepelt egy korábbi szállításban!\n' +
+                                  'Túra: ' + data.tour_name + ' (' + new Date(Number(data.date)).toLocaleDateString() + ')\n' +
+                                  'Státusz: ' + data.status);
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            function filterCargoRows() {
+                const search = document.getElementById('cargoSearch').value.toLowerCase();
+                const status = document.getElementById('cargoStatusFilter').value;
+                document.querySelectorAll('.cargo-edit-row').forEach(r => {
+                    const name = r.querySelector('.cargo-name').value.toLowerCase();
+                    const sn = r.querySelector('.cargo-sn').value.toLowerCase();
+                    const ref = r.querySelector('.cargo-ref').value.toLowerCase();
+                    const s = r.querySelector('.cargo-status').value;
+                    const matchesSearch = name.includes(search) || sn.includes(search) || ref.includes(search);
+                    const matchesStatus = !status || s === status;
+                    r.style.display = (matchesSearch && matchesStatus) ? 'block' : 'none';
+                });
+            }
+
+            async function viewCargoHistory(id) {
+                if (!id) return;
+                try {
+                    const res = await fetch('/api/cargo/' + id);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    document.getElementById('historyTitle').innerText = 'Szállítmány történet: ' + data.name + ' (S/N: ' + (data.serial_number || 'N/A') + ')';
+                    const list = document.getElementById('cargoHistoryList');
+                    list.innerHTML = (data.events || []).map(e => `
+                        <tr>
+                            <td>${new Date(Number(e.timestamp)).toLocaleString()}</td>
+                            <td><b>${e.event_type}</b></td>
+                            <td>${e.from_status || '---'} → ${e.to_status || '---'}</td>
+                            <td>${e.actor_type || 'SYSTEM'}${e.actor_id ? ' ('+e.actor_id+')' : ''}</td>
+                            <td>${e.reason || ''}</td>
+                        </tr>
+                    `).join('');
+                    document.getElementById('cargoHistoryModal').style.display = 'block';
+                } catch(e) { alert('Hiba a történet betöltésekor'); }
             }
 
             function normalizeStopForEditor(s) {

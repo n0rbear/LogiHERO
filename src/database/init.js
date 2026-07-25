@@ -105,6 +105,7 @@ const initDb = async () => {
             stop_id INT REFERENCES stops(id),
             timestamp BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
             reason TEXT,
+            client_event_id TEXT UNIQUE,
             metadata JSONB
         )`,
         `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$

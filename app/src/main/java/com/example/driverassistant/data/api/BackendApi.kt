@@ -225,5 +225,6 @@ data class CargoTransitionRequest(
     val driverName: String,
     val condition: String? = null,
     val reason: String? = null,
+    val clientEventId: String? = null,
     val metadata: String? = null
 )

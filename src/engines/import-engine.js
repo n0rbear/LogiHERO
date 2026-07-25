@@ -93,6 +93,29 @@ const ImportEngine = {
             }
         }
 
+        // --- CARGO VALIDATION (Sequence) ---
+        if (isMobileSync) {
+            const cargo = await client.query(
+                `SELECT c.id, c.name, s1.order_index as pickup_idx, s2.order_index as delivery_idx
+                 FROM cargo c
+                 JOIN stops s1 ON c.pickup_stop_id = s1.id
+                 JOIN stops s2 ON c.delivery_stop_id = s2.id
+                 WHERE c.tour_id = $1 AND c.deleted_at IS NULL`,
+                [tourId]
+            );
+            const conflicts = cargo.rows.filter(c => c.delivery_idx < c.pickup_idx);
+            if (conflicts.length > 0) {
+                console.warn(`[CARGO] Sync conflict: ${conflicts.length} items have delivery before pickup after stop reorder.`);
+                const ndp = require('../integrations/ndp-client');
+                await ndp.trackEvent({
+                    traceId: 'sync-' + Date.now(),
+                    eventType: 'cargo_sync_conflict',
+                    title: 'Cargo sequence conflict during sync',
+                    payload: { tourId, conflictCount: conflicts.length }
+                });
+            }
+        }
+
         // --- CARGO SYNC ---
         const cargoItems = options.cargo || [];
         if (cargoItems.length > 0 || isMobileSync) {

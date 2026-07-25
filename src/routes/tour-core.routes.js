@@ -45,7 +45,35 @@ async function getTourWithStops(client, id) {
     const tour = tourRes.rows[0];
     if (!tour) return null;
     const stopsRes = await client.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC, id ASC', [id]);
-    return { tour, stops: stopsRes.rows.map(TourCore.normalizeStop) };
+    const cargoRes = await client.query('SELECT * FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL', [id]);
+    return { tour, stops: stopsRes.rows.map(TourCore.normalizeStop), cargo: cargoRes.rows };
+}
+
+async function checkCargoBlocking(client, tourId, stopId = null) {
+    const query = stopId
+        ? `SELECT id, name, serial_number, status, pickup_stop_id, delivery_stop_id
+           FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL AND (pickup_stop_id = $2 OR delivery_stop_id = $2)`
+        : `SELECT id, name, serial_number, status, pickup_stop_id, delivery_stop_id
+           FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL`;
+
+    const res = await client.query(query, stopId ? [tourId, stopId] : [tourId]);
+    const blocking = [];
+
+    for (const c of res.rows) {
+        if (stopId) {
+            if (c.pickup_stop_id === stopId && ['PLANNED', 'READY_FOR_PICKUP'].includes(c.status)) {
+                blocking.push({ ...c, requiredAction: 'PICKUP_REQUIRED' });
+            } else if (c.delivery_stop_id === stopId && ['PICKED_UP', 'IN_TRANSIT'].includes(c.status)) {
+                blocking.push({ ...c, requiredAction: 'DELIVERY_REQUIRED' });
+            }
+        } else {
+            // General tour blocking
+            if (['PLANNED', 'READY_FOR_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'DAMAGED', 'MISSING'].includes(c.status)) {
+                blocking.push({ ...c, requiredAction: 'UNRESOLVED_CARGO' });
+            }
+        }
+    }
+    return blocking;
 }
 
 async function latestLocation(client, tour) {
@@ -90,15 +118,20 @@ async function refreshProgress(client, tourId, traceId) {
             });
         }
     } else if (newStatus === 'IN_PROGRESS' && data.stops.every(s => s.is_completed || s.stop_status === 'SKIPPED')) {
-        newStatus = 'COMPLETED';
-        if (traceId) {
-            await ndp.trackEvent({
-                traceId,
-                eventType: 'tour_completed',
-                title: 'Tour completed',
-                component: 'backend',
-                payload: { tourId: String(tourId) }
-            });
+        const blockingCargo = await checkCargoBlocking(client, tourId);
+        if (blockingCargo.length === 0) {
+            newStatus = 'COMPLETED';
+            if (traceId) {
+                await ndp.trackEvent({
+                    traceId,
+                    eventType: 'tour_completed',
+                    title: 'Tour completed',
+                    component: 'backend',
+                    payload: { tourId: String(tourId) }
+                });
+            }
+        } else {
+            console.log(`[TOUR] completion blocked for ${tourId} by ${blockingCargo.length} cargo items`);
         }
     }
 
@@ -167,7 +200,8 @@ tourCoreRoutes.get('/api/tours/:id', async (req, res) => {
         const data = await getTourWithStops(pool, req.params.id);
         if (!data) return res.sendStatus(404);
         const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
-        res.json({ ...data, progress });
+        const blockingCargo = await checkCargoBlocking(pool, req.params.id);
+        res.json({ ...data, progress, blockingCargo });
     } catch (error) {
         res.status(500).json({ error: 'Tour read failed.' });
     }
@@ -221,21 +255,52 @@ tourCoreRoutes.post('/api/tours', requireAdmin, async (req, res) => {
 });
 
 tourCoreRoutes.patch('/api/tours/:id', requireAdmin, async (req, res) => {
+    const client = await pool.connect();
     try {
         const now = Date.now();
         const body = req.body || {};
-        const updated = await pool.query(
+        await client.query('BEGIN');
+
+        if (body.tour_status === 'COMPLETED' || body.status === 'COMPLETED' || body.is_closed) {
+            const blocking = await checkCargoBlocking(client, req.params.id);
+            if (blocking.length > 0 && !body.override_reason) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    error: 'TOUR_COMPLETION_BLOCKED_BY_CARGO',
+                    message: 'Cannot close tour with unresolved cargo',
+                    blockingCargo: blocking
+                });
+            }
+            if (body.override_reason) {
+                await ndp.trackEvent({
+                    traceId: ndp.getTraceId(req),
+                    eventType: 'tour_completion_overridden',
+                    title: 'Tour completion overridden',
+                    payload: { tourId: req.params.id, reason: body.override_reason }
+                });
+            }
+        }
+
+        const updated = await client.query(
             `UPDATE tours SET name=COALESCE($1,name), driver_name=COALESCE($2,driver_name), vehicle=COALESCE($3,vehicle),
              trailer=COALESCE($4,trailer), notes=COALESCE($5,notes), tour_status=COALESCE($6,tour_status),
-             planned_start_at=COALESCE($7,planned_start_at), planned_end_at=COALESCE($8,planned_end_at), updated_at=$9
-             WHERE id=$10 AND deleted_at IS NULL RETURNING *`,
-            [textOrNull(body.name), textOrNull(body.driver_name || body.driverName), textOrNull(body.vehicle), textOrNull(body.trailer), textOrNull(body.notes), textOrNull(body.tour_status || body.status), numberOrNull(body.planned_start_at || body.plannedStartAt), numberOrNull(body.planned_end_at || body.plannedEndAt), now, req.params.id]
+             planned_start_at=COALESCE($7,planned_start_at), planned_end_at=COALESCE($8,planned_end_at),
+             is_closed=COALESCE($9,is_closed), updated_at=$10
+             WHERE id=$11 AND deleted_at IS NULL RETURNING *`,
+            [textOrNull(body.name), textOrNull(body.driver_name || body.driverName), textOrNull(body.vehicle), textOrNull(body.trailer), textOrNull(body.notes), textOrNull(body.tour_status || body.status), numberOrNull(body.planned_start_at || body.plannedStartAt), numberOrNull(body.planned_end_at || body.plannedEndAt), body.is_closed, now, req.params.id]
         );
-        if (!updated.rows[0]) return res.sendStatus(404);
+        if (!updated.rows[0]) {
+            await client.query('ROLLBACK');
+            return res.sendStatus(404);
+        }
+        await client.query('COMMIT');
         await ndp.trackEvent({ traceId: ndp.getTraceId(req), eventType: 'tour_updated', title: 'Tour updated', component: 'backend', payload: { tourId: String(req.params.id) } });
         res.json(updated.rows[0]);
     } catch (error) {
-        res.status(400).json({ error: 'Tour update failed.' });
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: error.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -337,16 +402,39 @@ tourCoreRoutes.post('/api/tours/:id/stops/reorder', requireAdmin, async (req, re
     try {
         const now = Date.now();
         await client.query('BEGIN');
+
+        // Update indices first
         for (let index = 0; index < orderedIds.length; index += 1) {
             await client.query('UPDATE stops SET order_index=$1, updated_at=$2 WHERE id=$3 AND tour_id=$4 AND deleted_at IS NULL', [index, now, orderedIds[index], req.params.id]);
         }
+
+        // Validate Cargo sequence
+        const cargo = await client.query(
+            `SELECT c.id, c.name, s1.order_index as pickup_idx, s2.order_index as delivery_idx
+             FROM cargo c
+             JOIN stops s1 ON c.pickup_stop_id = s1.id
+             JOIN stops s2 ON c.delivery_stop_id = s2.id
+             WHERE c.tour_id = $1 AND c.deleted_at IS NULL`,
+            [req.params.id]
+        );
+
+        const conflicts = cargo.rows.filter(c => c.delivery_idx < c.pickup_idx);
+        if (conflicts.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                error: 'STOP_REORDER_CARGO_CONFLICT',
+                message: 'Stop order conflicts with cargo pickup/delivery sequence',
+                conflicts
+            });
+        }
+
         await recalculateTour(client, req.params.id, traceId, 'stop_reordered');
         await client.query('COMMIT');
         await ndp.trackEvent({ traceId, eventType: 'stop_reordered', title: 'Stops reordered', component: 'backend', payload: { tourId: String(req.params.id), stopCount: String(orderedIds.length) } });
         res.json({ success: true });
     } catch (error) {
         await client.query('ROLLBACK');
-        res.status(400).json({ error: 'Stop reorder failed.' });
+        res.status(400).json({ error: error.message });
     } finally {
         client.release();
     }
@@ -387,10 +475,15 @@ tourCoreRoutes.get('/api/tours/:id/route', async (req, res) => {
 });
 
 tourCoreRoutes.get('/api/tours/:id/progress', async (req, res) => {
-    const data = await getTourWithStops(pool, req.params.id);
-    if (!data) return res.sendStatus(404);
-    const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
-    res.json(progress);
+    try {
+        const data = await getTourWithStops(pool, req.params.id);
+        if (!data) return res.sendStatus(404);
+        const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
+        const blockingCargo = await checkCargoBlocking(pool, req.params.id);
+        res.json({ ...progress, blockingCargo });
+    } catch (error) {
+        res.status(500).json({ error: 'Progress read failed.' });
+    }
 });
 
 tourCoreRoutes.post('/api/tours/:id/location', async (req, res) => {
@@ -415,16 +508,46 @@ tourCoreRoutes.post('/api/tours/:id/location', async (req, res) => {
 async function markStop(req, res, status) {
     const traceId = ndp.getTraceId(req);
     const now = Date.now();
-    const result = await pool.query(
-        `UPDATE stops SET stop_status=$1, is_completed=$2, arrival_time=COALESCE(arrival_time,$3),
-         actual_departure_time=CASE WHEN $1='COMPLETED' THEN $3 ELSE actual_departure_time END, updated_at=$3
-         WHERE id=$4 AND tour_id=$5 AND deleted_at IS NULL RETURNING *`,
-        [status, status === 'COMPLETED', now, req.params.stopId, req.params.id]
-    );
-    if (!result.rows[0]) return res.sendStatus(404);
-    const progress = await refreshProgress(pool, req.params.id, traceId);
-    await ndp.trackEvent({ traceId, eventType: status === 'COMPLETED' ? 'stop_completed' : 'stop_arrived', title: `Stop ${status.toLowerCase()}`, component: 'backend', payload: { tourId: String(req.params.id), stopId: String(req.params.stopId) } });
-    res.json({ stop: result.rows[0], progress });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        if (status === 'COMPLETED') {
+            const blocking = await checkCargoBlocking(client, req.params.id, Number(req.params.stopId));
+            if (blocking.length > 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    error: 'STOP_COMPLETION_BLOCKED_BY_CARGO',
+                    message: 'Pending cargo actions at this stop',
+                    blockingCargo: blocking.map(c => ({
+                        id: c.id, name: c.name, status: c.status, action: c.requiredAction,
+                        serialMasked: c.serial_number ? c.serial_number.slice(0, 3) + '***' : null
+                    }))
+                });
+            }
+        }
+
+        const result = await client.query(
+            `UPDATE stops SET stop_status=$1, is_completed=$2, arrival_time=COALESCE(arrival_time,$3),
+             actual_departure_time=CASE WHEN $1='COMPLETED' THEN $3 ELSE actual_departure_time END, updated_at=$3
+             WHERE id=$4 AND tour_id=$5 AND deleted_at IS NULL RETURNING *`,
+            [status, status === 'COMPLETED', now, req.params.stopId, req.params.id]
+        );
+        if (!result.rows[0]) {
+            await client.query('ROLLBACK');
+            return res.sendStatus(404);
+        }
+        const progress = await refreshProgress(client, req.params.id, traceId);
+        await client.query('COMMIT');
+
+        await ndp.trackEvent({ traceId, eventType: status === 'COMPLETED' ? 'stop_completed' : 'stop_arrived', title: `Stop ${status.toLowerCase()}`, component: 'backend', payload: { tourId: String(req.params.id), stopId: String(req.params.stopId) } });
+        res.json({ stop: result.rows[0], progress });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: e.message });
+    } finally {
+        client.release();
+    }
 }
 
 tourCoreRoutes.post('/api/tours/:id/stops/:stopId/arrive', async (req, res) => markStop(req, res, 'ARRIVED'));
@@ -442,14 +565,38 @@ tourCoreRoutes.get('/admin/tours', async (_req, res) => {
     .tour{border-bottom:1px solid var(--border);padding:10px 0}.tour button{margin-top:8px}.metric{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric div{background:#edf5ef;padding:10px;border-radius:6px}
     .status{font-size:12px;color:var(--muted)} @media(max-width:900px){main{grid-template-columns:1fr}#map{height:420px}}
     </style></head><body><header><h1>LogiHERO Túrák</h1></header><main>
-    <section class="panel"><h2>Túralista</h2><div id="tours"></div></section>
+    <section class="panel"><h2>Túralista</h2>
+      <input type="text" id="tourSearch" placeholder="Túra v. szállítmány keresés..." oninput="searchTours()" style="width:100%; padding:8px; margin-bottom:10px; box-sizing:border-box;">
+      <div id="tours"></div>
+    </section>
     <section class="panel"><h2 id="title">Térkép</h2><div class="metric" id="metrics"></div><p id="next"></p><div id="map"></div><div id="stops"></div></section>
     </main><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
     const map=L.map('map').setView([47.5,19.04],7); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'OSM'}).addTo(map);
     let layer=L.layerGroup().addTo(map); const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const km=v=>Number(v||0).toFixed(1)+' km'; const min=s=>Math.round(Number(s||0)/60)+' perc';
-    async function load(){const r=await fetch('/api/tours'); const tours=await r.json(); document.getElementById('tours').innerHTML=tours.map(t=>'<div class="tour"><b>'+esc(t.name)+'</b><div class="status">'+esc(t.driver_name||'')+' | '+esc(t.tour_status||'PLANNED')+'</div><button onclick="openTour('+t.id+')">Térkép</button></div>').join('')||'Nincs túra';}
-    async function openTour(id){const r=await fetch('/api/tours/'+id); const d=await r.json(); const route=await (await fetch('/api/tours/'+id+'/route')).json(); layer.clearLayers(); document.getElementById('title').textContent=d.tour.name; const p=d.progress||{};
+    let allTours = [];
+    async function load(){
+      const r=await fetch('/api/tours');
+      allTours=await r.json();
+      renderTours(allTours);
+    }
+    function renderTours(tours){
+      document.getElementById('tours').innerHTML=tours.map(t=>'<div class="tour"><b>'+esc(t.name)+'</b><div class="status">'+esc(t.driver_name||'')+' | '+esc(t.tour_status||'PLANNED')+'</div><button onclick="openTour('+t.id+')">Térkép</button></div>').join('')||'Nincs találat';
+    }
+    function searchTours(){
+      const q = document.getElementById('tourSearch').value.toLowerCase();
+      const filtered = allTours.filter(t => t.name.toLowerCase().includes(q) || (t.driver_name||'').toLowerCase().includes(q));
+      renderTours(filtered);
+    }
+    async function openTour(id){const r=await fetch('/api/tours/'+id); const d=await r.json(); const route=await (await fetch('/api/tours/'+id+'/route')).json(); layer.clearLayers(); document.getElementById('title').textContent=d.tour.name;      const p=d.progress||{};
+      const cargo = d.cargo || [];
+      const cargoSummary = `
+        <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; font-size:11px;">
+            <div style="background:#eee; padding:5px; border-radius:3px;">📦 Összes: <b>${cargo.length}</b></div>
+            <div style="background:#e8f5e9; padding:5px; border-radius:3px;">✅ Kézbesítve: <b>${cargo.filter(c => c.status === 'DELIVERED').length}</b></div>
+            <div style="background:#ffebee; padding:5px; border-radius:3px;">⚠️ Problémás: <b>${cargo.filter(c => ['DAMAGED','MISSING','REJECTED'].includes(c.status)).length}</b></div>
+        </div>
+      `;
       let warnHtml = '';
       if (d.stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
         warnHtml = '<div style="color:var(--err); background:rgba(199,53,53,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>Hiányzó koordináta!</b> Az útvonal pontatlan lehet.</div>';
@@ -461,7 +608,7 @@ tourCoreRoutes.get('/admin/tours', async (_req, res) => {
         warnHtml += '<div style="color:var(--warn); background:rgba(183,121,31,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>OSRM hiba!</b> Légvonalbeli becslés használatban.</div>';
       }
 
-      document.getElementById('metrics').innerHTML=warnHtml + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div>Teljes<br><b>'+km(p.plannedDistance)+'</b></div><div>Hátra<br><b>'+km(p.remainingDistance)+'</b></div><div>Következőig<br><b>'+km(p.distanceToNextStop)+'</b></div><div>Idő hátra<br><b>'+min(p.remainingDuration)+'</b></div></div>';
+      document.getElementById('metrics').innerHTML=warnHtml + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div>Teljes<br><b>'+km(p.plannedDistance)+'</b></div><div>Hátra<br><b>'+km(p.remainingDistance)+'</b></div><div>Következőig<br><b>'+km(p.distanceToNextStop)+'</b></div><div>Idő hátra<br><b>'+min(p.remainingDuration)+'</b></div></div>' + cargoSummary;
       const ns=p.nextStop; document.getElementById('next').innerHTML=ns?'<b>Következő cím:</b> '+esc(ns.recipient||ns.company||'Megálló')+'<br>'+esc(ns.address_full||ns.address||''):'Nincs több aktív megálló';
       const bounds=[]; if(route.polyline&&route.polyline.coordinates){const latlngs=route.polyline.coordinates.map(c=>[c[1],c[0]]); L.polyline(latlngs,{color:'#16884f',weight:5}).addTo(layer); bounds.push(...latlngs);}
       d.stops.forEach((s,i)=>{if(s.latitude&&s.longitude&&Math.abs(s.latitude)>0.0001){const label=(s.stop_status==='COMPLETED'?'✓':s.stop_status==='PROBLEM'?'!':String(i+1)); const icon=L.divIcon({html:'<div style="background:#fff;border:2px solid #16884f;border-radius:16px;padding:3px 7px;font-weight:bold">'+label+'</div>'}); L.marker([s.latitude,s.longitude],{icon}).addTo(layer).bindPopup('<b>'+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.address_full||s.address||'')+'<br>'+esc(s.stop_status||'PENDING')+'<br><a target="_blank" href="'+esc('https://www.google.com/maps/dir/?api=1&destination='+s.latitude+','+s.longitude)+'">Navigáció</a>'); bounds.push([s.latitude,s.longitude]);}});

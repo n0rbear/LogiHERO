@@ -29,5 +29,6 @@ data class CargoEvent(
     @SerializedName("stop_id") val stopId: Long? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val reason: String? = null,
+    @SerializedName("client_event_id") val clientEventId: String? = null,
     val metadata: String? = null // JSON string
 )

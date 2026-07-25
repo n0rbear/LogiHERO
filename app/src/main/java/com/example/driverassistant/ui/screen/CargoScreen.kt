@@ -25,6 +25,17 @@ fun CargoScreen(
     val cargoList by viewModel.getCargoForTour(tourId).collectAsState(initial = emptyList())
     val stops by viewModel.getStopsForTour(tourId).collectAsState(initial = emptyList())
     
+    var selectedFilter by remember { mutableStateOf("Összes") }
+    val filteredCargo = remember(cargoList, selectedFilter) {
+        when (selectedFilter) {
+            "Felvételre vár" -> cargoList.filter { it.status == "READY_FOR_PICKUP" || it.status == "PLANNED" }
+            "Szállítás alatt" -> cargoList.filter { it.status == "PICKED_UP" || it.status == "IN_TRANSIT" }
+            "Kézbesítve" -> cargoList.filter { it.status == "DELIVERED" }
+            "Problémás" -> cargoList.filter { listOf("DAMAGED", "MISSING", "REJECTED").contains(it.status) }
+            else -> cargoList
+        }
+    }
+
     var selectedCargo by remember { mutableStateOf<Cargo?>(null) }
     var showActionDialog by remember { mutableStateOf(false) }
 
@@ -41,13 +52,27 @@ fun CargoScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            if (cargoList.isEmpty()) {
+            val filters = listOf("Összes", "Felvételre vár", "Szállítás alatt", "Kézbesítve", "Problémás")
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                filters.forEach { filter ->
+                    FilterChip(
+                        selected = selectedFilter == filter,
+                        onClick = { selectedFilter = filter },
+                        label = { Text(filter, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+
+            if (filteredCargo.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Nincsenek szállítmányok ehhez a túrához.")
+                    Text("Nincsenek szállítmányok ezzel a szűréssel.")
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                    items(cargoList) { cargo ->
+                LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                    items(filteredCargo) { cargo ->
                         CargoItemCard(
                             cargo = cargo,
                             onAction = {

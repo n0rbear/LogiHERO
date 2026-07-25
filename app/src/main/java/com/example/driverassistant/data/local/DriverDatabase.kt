@@ -78,10 +78,12 @@ abstract class DriverDatabase : RoomDatabase() {
                         `stopId` INTEGER, 
                         `timestamp` INTEGER NOT NULL, 
                         `reason` TEXT, 
+                        `clientEventId` TEXT, 
                         `metadata` TEXT, 
                         FOREIGN KEY(`cargoId`) REFERENCES `cargo`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE 
                     )
                 """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_cargo_events_clientEventId` ON `cargo_events` (`clientEventId`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_cargo_events_cargoId` ON `cargo_events` (`cargoId`)")
             }
         }
