@@ -44,6 +44,23 @@ private fun parseStopDate(value: String): Long? =
         null
     }
 
+private fun isStopDone(stop: Stop): Boolean =
+    stop.isCompleted || stop.stopStatus == "COMPLETED" || stop.stopStatus == "SKIPPED"
+
+private fun nextActiveStop(stops: List<Stop>): Stop? =
+    stops.sortedBy { it.orderIndex }.firstOrNull { !isStopDone(it) && it.stopStatus != "SKIPPED" }
+
+private fun formatKm(value: Double?): String =
+    value?.let { String.format(Locale.getDefault(), "%.1f km", it) } ?: "-- km"
+
+private fun formatDuration(seconds: Long?): String {
+    if (seconds == null || seconds <= 0) return "-- perc"
+    val minutes = (seconds + 59) / 60
+    val hours = minutes / 60
+    val rest = minutes % 60
+    return if (hours > 0) "${hours} ó ${rest} p" else "${minutes} perc"
+}
+
 @Composable
 fun ToursScreen(viewModel: ToursViewModel = hiltViewModel()) {
     val tours by viewModel.tours.collectAsState()
@@ -184,6 +201,8 @@ fun TourItem(tour: Tour, viewModel: ToursViewModel, onDelete: () -> Unit) {
                 Text(text = tour.notes, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp))
             }
 
+            TourProgressSummary(tour = tour, stops = stops)
+
             AnimatedVisibility(visible = expanded) {
                 Column {
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -285,6 +304,77 @@ fun TourItem(tour: Tour, viewModel: ToursViewModel, onDelete: () -> Unit) {
 }
 
 @Composable
+fun TourProgressSummary(tour: Tour, stops: List<Stop>) {
+    val orderedStops = stops.sortedBy { it.orderIndex }
+    val nextStop = nextActiveStop(orderedStops)
+    val completedKm = tour.completedDistanceKm
+        ?: orderedStops.filter(::isStopDone).sumOf { it.segmentDistanceKm ?: 0.0 }
+    val remainingKm = tour.remainingDistanceKm
+        ?: orderedStops.filterNot(::isStopDone).sumOf { it.segmentDistanceKm ?: 0.0 }
+    val remainingSeconds = tour.remainingDurationSeconds
+        ?: orderedStops.filterNot(::isStopDone).sumOf { it.segmentDurationSeconds ?: 0L }
+    val nextDistance = nextStop?.segmentDistanceKm
+    val nextDuration = nextStop?.segmentDurationSeconds
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = nextStop?.recipient?.ifBlank { nextStop.addressFull.ifBlank { nextStop.address } } ?: "Nincs következő aktív cím",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            if (nextStop != null) {
+                Text(
+                    text = nextStop.addressFull.ifBlank { nextStop.address },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProgressMetric("Következőig", formatKm(nextDistance), Modifier.weight(1f))
+                ProgressMetric("Idő", formatDuration(nextDuration), Modifier.weight(1f))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProgressMetric("Hátralévő", formatKm(remainingKm), Modifier.weight(1f))
+                ProgressMetric("Hátralévő idő", formatDuration(remainingSeconds), Modifier.weight(1f))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProgressMetric("Megtett", formatKm(completedKm), Modifier.weight(1f))
+                ProgressMetric("Teljes túra", formatKm(tour.plannedDistanceKm), Modifier.weight(1f))
+            }
+            if (tour.routeStatus != "OK") {
+                Text(
+                    text = "Útvonal állapot: ${tour.routeStatus}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgressMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        tonalElevation = 1.dp,
+        shape = MaterialTheme.shapes.small,
+        modifier = modifier.heightIn(min = 64.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.Center) {
+            Text(text = label, style = MaterialTheme.typography.labelSmall)
+            Text(text = value, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+@Composable
 fun StopItem(
     tour: Tour,
     stop: Stop,
@@ -359,6 +449,16 @@ fun StopItem(
                 TextButton(onClick = { IntentUtils.openMaps(context, stop.address) }) {
                     Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(16.dp))
                     Text("Navigálás", style = MaterialTheme.typography.labelSmall)
+                }
+                if (!isStopDone(stop)) {
+                    TextButton(onClick = { viewModel.markStopArrived(stop) }) {
+                        Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("Megérkeztem", style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(onClick = { viewModel.markStopCompleted(stop) }) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("Kész", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
                 if (stop.phoneNumber.isNotBlank()) {
                     TextButton(onClick = { IntentUtils.dialPhoneNumber(context, stop.phoneNumber) }) {

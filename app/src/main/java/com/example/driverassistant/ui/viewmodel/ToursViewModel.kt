@@ -218,6 +218,32 @@ class ToursViewModel @Inject constructor(
         }
     }
 
+    fun markStopArrived(stop: Stop) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            repository.updateStop(stop.copy(
+                stopStatus = "ARRIVED",
+                arrivalTime = stop.arrivalTime ?: now,
+                updatedAt = now
+            ))
+            syncToursWithBackend()
+        }
+    }
+
+    fun markStopCompleted(stop: Stop) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            repository.updateStop(stop.copy(
+                stopStatus = "COMPLETED",
+                isCompleted = true,
+                arrivalTime = stop.arrivalTime ?: now,
+                actualDepartureTime = now,
+                updatedAt = now
+            ))
+            syncToursWithBackend()
+        }
+    }
+
     fun moveStopUp(tourId: Long, stop: Stop) {
         viewModelScope.launch {
             val stops = repository.getStopsForTour(tourId).first().toMutableList()

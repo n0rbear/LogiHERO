@@ -20,7 +20,7 @@ import com.example.driverassistant.domain.model.*
         CustomerMapping::class,
         ChatMessage::class
     ],
-    version = 24,
+    version = 25,
     exportSchema = false
 )
 abstract class DriverDatabase : RoomDatabase() {
@@ -135,6 +135,36 @@ abstract class DriverDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE stops ADD COLUMN roomNumber TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE stops ADD COLUMN entryCode TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE stops ADD COLUMN bookingNumber TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tours ADD COLUMN vehicle TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE tours ADD COLUMN trailer TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE tours ADD COLUMN returnDepotName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE tours ADD COLUMN returnDepotAddressFull TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE tours ADD COLUMN returnDepotLat REAL")
+                db.execSQL("ALTER TABLE tours ADD COLUMN returnDepotLng REAL")
+                db.execSQL("ALTER TABLE tours ADD COLUMN plannedStartAt INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN plannedEndAt INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN actualStartAt INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN actualEndAt INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN tourStatus TEXT NOT NULL DEFAULT 'PLANNED'")
+                db.execSQL("ALTER TABLE tours ADD COLUMN nextStopId INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN plannedDistanceKm REAL")
+                db.execSQL("ALTER TABLE tours ADD COLUMN plannedDurationSeconds INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN remainingDistanceKm REAL")
+                db.execSQL("ALTER TABLE tours ADD COLUMN remainingDurationSeconds INTEGER")
+                db.execSQL("ALTER TABLE tours ADD COLUMN completedDistanceKm REAL")
+                db.execSQL("ALTER TABLE tours ADD COLUMN routeStatus TEXT NOT NULL DEFAULT 'NOT_CALCULATED'")
+                db.execSQL("ALTER TABLE stops ADD COLUMN stopStatus TEXT NOT NULL DEFAULT 'PENDING'")
+                db.execSQL("ALTER TABLE stops ADD COLUMN actualDepartureTime INTEGER")
+                db.execSQL("ALTER TABLE stops ADD COLUMN segmentDistanceKm REAL")
+                db.execSQL("ALTER TABLE stops ADD COLUMN segmentDurationSeconds INTEGER")
+                db.execSQL("ALTER TABLE stops ADD COLUMN cumulativeDistanceKm REAL")
+                db.execSQL("ALTER TABLE stops ADD COLUMN cumulativeDurationSeconds INTEGER")
+                db.execSQL("ALTER TABLE stops ADD COLUMN routeWarning TEXT")
             }
         }
     }

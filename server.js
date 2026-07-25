@@ -30,6 +30,7 @@ const createDriverDashboardRoutes = require('./src/routes/driver-dashboard.route
 const historyRoutes = require('./src/routes/history.routes');
 const currentTourRoutes = require('./src/routes/current-tour.routes');
 const tourRoutes = require('./src/routes/tour.routes');
+const tourCoreRoutes = require('./src/routes/tour-core.routes');
 const adminTourRoutes = require('./src/routes/admin-tour.routes');
 const devResetRoutes = require('./src/routes/dev-reset.routes');
 const devSeedRoutes = require('./src/routes/dev-seed.routes');
@@ -84,6 +85,8 @@ app.use(driverReadRoutes);
 app.use(createSyncTourRoutes({ ImportEngine }));
 
 app.use(tourRoutes);
+
+app.use(tourCoreRoutes);
 
 app.use(hotelReadRoutes);
 

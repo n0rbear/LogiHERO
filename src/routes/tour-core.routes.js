@@ -1,0 +1,437 @@
+const express = require('express');
+const pool = require('../database/pool');
+const requireAdmin = require('../middleware/requireAdmin');
+const ndp = require('../integrations/ndp-client');
+const TourCore = require('../engines/tour-core-engine');
+
+function numberOrNull(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function textOrNull(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function sanitizeStopPayload(body) {
+    const addressFull = textOrNull(body.address_full) || textOrNull(body.addressFull) || [body.street, body.house_number || body.houseNumber, body.postal_code || body.postalCode, body.city, body.country].filter(Boolean).join(' ');
+    return {
+        uuid: textOrNull(body.uuid),
+        recipient: textOrNull(body.recipient),
+        company: textOrNull(body.company),
+        address: addressFull || textOrNull(body.address),
+        street: textOrNull(body.street),
+        house_number: textOrNull(body.house_number || body.houseNumber),
+        postal_code: textOrNull(body.postal_code || body.postalCode),
+        city: textOrNull(body.city),
+        country: textOrNull(body.country),
+        address_full: addressFull || textOrNull(body.address),
+        contact_name: textOrNull(body.contact_name || body.contactName),
+        phone_number: textOrNull(body.phone_number || body.phoneNumber),
+        time_window: textOrNull(body.time_window || body.timeWindow),
+        stop_date: numberOrNull(body.stop_date || body.stopDate),
+        notes: textOrNull(body.notes),
+        order_index: Number.isInteger(Number(body.order_index ?? body.orderIndex)) ? Number(body.order_index ?? body.orderIndex) : null,
+        latitude: numberOrNull(body.latitude),
+        longitude: numberOrNull(body.longitude),
+        stop_type: textOrNull(body.stop_type || body.stopType) || 'DELIVERY',
+        stop_status: textOrNull(body.stop_status || body.stopStatus) || null
+    };
+}
+
+async function getTourWithStops(client, id) {
+    const tourRes = await client.query('SELECT * FROM tours WHERE id = $1 AND deleted_at IS NULL', [id]);
+    const tour = tourRes.rows[0];
+    if (!tour) return null;
+    const stopsRes = await client.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC, id ASC', [id]);
+    return { tour, stops: stopsRes.rows.map(TourCore.normalizeStop) };
+}
+
+async function latestLocation(client, tour) {
+    const location = await client.query(
+        'SELECT latitude, longitude, speed, status, timestamp FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1',
+        [tour.driver_name]
+    );
+    return location.rows[0] || null;
+}
+
+async function persistRoute(client, tourId, route) {
+    await client.query(
+        `UPDATE tours SET planned_distance_km=$1, planned_duration_seconds=$2, route_polyline=$3::jsonb,
+         route_status=$4, route_error=$5, route_calculated_at=$6, updated_at=$6 WHERE id=$7`,
+        [route.planned_distance_km, route.planned_duration_seconds, route.route_polyline, route.route_status, route.route_error, route.route_calculated_at, tourId]
+    );
+    for (const stop of route.stops) {
+        await client.query(
+            `UPDATE stops SET segment_distance_km=$1, segment_duration_seconds=$2,
+             cumulative_distance_km=$3, cumulative_duration_seconds=$4, route_warning=$5 WHERE id=$6`,
+            [stop.segment_distance_km, stop.segment_duration_seconds, stop.cumulative_distance_km, stop.cumulative_duration_seconds, route.warnings.join(','), stop.id]
+        );
+    }
+}
+
+async function refreshProgress(client, tourId) {
+    const data = await getTourWithStops(client, tourId);
+    if (!data) return null;
+    const live = await latestLocation(client, data.tour);
+    const progress = TourCore.calculateProgress(data.tour, data.stops, live);
+    await client.query(
+        `UPDATE tours SET next_stop_id=$1, remaining_distance_km=$2, remaining_duration_seconds=$3,
+         completed_distance_km=$4, last_driver_lat=COALESCE($5,last_driver_lat),
+         last_driver_lng=COALESCE($6,last_driver_lng), last_driver_location_at=COALESCE($7,last_driver_location_at)
+         WHERE id=$8`,
+        [
+            progress.nextStop?.id || null,
+            progress.remainingDistance,
+            progress.remainingDuration,
+            progress.completedDistance,
+            live?.latitude || null,
+            live?.longitude || null,
+            live?.timestamp || null,
+            tourId
+        ]
+    );
+    return progress;
+}
+
+async function recalculateTour(client, tourId, traceId, reason = 'manual') {
+    const data = await getTourWithStops(client, tourId);
+    if (!data) return null;
+    const route = await TourCore.calculateTourRoute(data.tour, data.stops);
+    await persistRoute(client, tourId, route);
+    const progress = await refreshProgress(client, tourId);
+    await ndp.trackEvent({
+        traceId,
+        eventType: route.route_status === 'OK' ? 'tour_route_calculated' : 'tour_route_calculation_failed',
+        title: 'Tour route recalculated',
+        component: 'route',
+        payload: {
+            tourId: String(tourId),
+            reason,
+            routeStatus: route.route_status,
+            stopCount: String(data.stops.length),
+            warnings: route.warnings.join(',')
+        }
+    });
+    return { route, progress };
+}
+
+const tourCoreRoutes = express.Router();
+
+tourCoreRoutes.get('/api/tours', async (_req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT t.*, lu.timestamp AS latest_location_at
+             FROM tours t
+             LEFT JOIN LATERAL (
+                SELECT timestamp FROM live_updates WHERE driver_name=t.driver_name ORDER BY timestamp DESC LIMIT 1
+             ) lu ON true
+             WHERE t.deleted_at IS NULL
+             ORDER BY COALESCE(t.planned_start_at, t.date, t.updated_at, 0) DESC`
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('[TOUR] list failed:', error.message);
+        res.status(500).json({ error: 'Tour list failed.' });
+    }
+});
+
+tourCoreRoutes.get('/api/tours/:id', async (req, res) => {
+    try {
+        const data = await getTourWithStops(pool, req.params.id);
+        if (!data) return res.sendStatus(404);
+        const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
+        res.json({ ...data, progress });
+    } catch (error) {
+        res.status(500).json({ error: 'Tour read failed.' });
+    }
+});
+
+tourCoreRoutes.post('/api/tours', requireAdmin, async (req, res) => {
+    const traceId = ndp.getTraceId(req);
+    const client = await pool.connect();
+    try {
+        const now = Date.now();
+        const body = req.body || {};
+        await client.query('BEGIN');
+        const created = await client.query(
+            `INSERT INTO tours (driver_name, name, customer, date, notes, is_closed, is_current, depot_name,
+             depot_address_full, depot_lat, depot_lng, return_depot_name, return_depot_address_full,
+             return_depot_lat, return_depot_lng, vehicle, trailer, planned_start_at, planned_end_at,
+             tour_status, updated_at)
+             VALUES ($1,$2,$3,$4,$5,false,false,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             RETURNING *`,
+            [
+                textOrNull(body.driver_name || body.driverName),
+                textOrNull(body.name) || `Tura ${now}`,
+                textOrNull(body.customer),
+                numberOrNull(body.date) || now,
+                textOrNull(body.notes),
+                textOrNull(body.depot_name || body.depotName),
+                textOrNull(body.depot_address_full || body.depotAddressFull),
+                numberOrNull(body.depot_lat || body.depotLat),
+                numberOrNull(body.depot_lng || body.depotLng),
+                textOrNull(body.return_depot_name || body.returnDepotName),
+                textOrNull(body.return_depot_address_full || body.returnDepotAddressFull),
+                numberOrNull(body.return_depot_lat || body.returnDepotLat),
+                numberOrNull(body.return_depot_lng || body.returnDepotLng),
+                textOrNull(body.vehicle),
+                textOrNull(body.trailer),
+                numberOrNull(body.planned_start_at || body.plannedStartAt),
+                numberOrNull(body.planned_end_at || body.plannedEndAt),
+                textOrNull(body.tour_status || body.status) || 'PLANNED',
+                now
+            ]
+        );
+        await client.query('COMMIT');
+        await ndp.trackEvent({ traceId, eventType: 'tour_created', title: 'Tour created', component: 'backend', payload: { tourId: String(created.rows[0].id) } });
+        res.status(201).json(created.rows[0]);
+    } catch (error) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: 'Tour create failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+tourCoreRoutes.patch('/api/tours/:id', requireAdmin, async (req, res) => {
+    try {
+        const now = Date.now();
+        const body = req.body || {};
+        const updated = await pool.query(
+            `UPDATE tours SET name=COALESCE($1,name), driver_name=COALESCE($2,driver_name), vehicle=COALESCE($3,vehicle),
+             trailer=COALESCE($4,trailer), notes=COALESCE($5,notes), tour_status=COALESCE($6,tour_status),
+             planned_start_at=COALESCE($7,planned_start_at), planned_end_at=COALESCE($8,planned_end_at), updated_at=$9
+             WHERE id=$10 AND deleted_at IS NULL RETURNING *`,
+            [textOrNull(body.name), textOrNull(body.driver_name || body.driverName), textOrNull(body.vehicle), textOrNull(body.trailer), textOrNull(body.notes), textOrNull(body.tour_status || body.status), numberOrNull(body.planned_start_at || body.plannedStartAt), numberOrNull(body.planned_end_at || body.plannedEndAt), now, req.params.id]
+        );
+        if (!updated.rows[0]) return res.sendStatus(404);
+        await ndp.trackEvent({ traceId: ndp.getTraceId(req), eventType: 'tour_updated', title: 'Tour updated', component: 'backend', payload: { tourId: String(req.params.id) } });
+        res.json(updated.rows[0]);
+    } catch (error) {
+        res.status(400).json({ error: 'Tour update failed.' });
+    }
+});
+
+tourCoreRoutes.get('/api/tours/:id/stops', async (req, res) => {
+    const data = await getTourWithStops(pool, req.params.id);
+    if (!data) return res.sendStatus(404);
+    res.json(data.stops);
+});
+
+tourCoreRoutes.post('/api/tours/:id/stops', requireAdmin, async (req, res) => {
+    const traceId = ndp.getTraceId(req);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const payload = sanitizeStopPayload(req.body || {});
+        const nextOrder = payload.order_index ?? Number((await client.query('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM stops WHERE tour_id=$1 AND deleted_at IS NULL', [req.params.id])).rows[0].next);
+        const inserted = await client.query(
+            `INSERT INTO stops (tour_id, recipient, company, address, street, house_number, postal_code, city, country, address_full,
+             contact_name, phone_number, time_window, stop_date, notes, order_index, latitude, longitude, stop_type, stop_status, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+            [req.params.id, payload.recipient, payload.company, payload.address, payload.street, payload.house_number, payload.postal_code, payload.city, payload.country, payload.address_full, payload.contact_name, payload.phone_number, payload.time_window, payload.stop_date, payload.notes, nextOrder, payload.latitude, payload.longitude, payload.stop_type, payload.stop_status || 'PENDING', Date.now()]
+        );
+        await recalculateTour(client, req.params.id, traceId, 'stop_created');
+        await client.query('COMMIT');
+        await ndp.trackEvent({ traceId, eventType: 'stop_created', title: 'Stop created', component: 'backend', payload: { tourId: String(req.params.id), stopId: String(inserted.rows[0].id) } });
+        res.status(201).json(inserted.rows[0]);
+    } catch (error) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: 'Stop create failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+tourCoreRoutes.patch('/api/tours/:id/stops/:stopId', requireAdmin, async (req, res) => {
+    const traceId = ndp.getTraceId(req);
+    const client = await pool.connect();
+    try {
+        const payload = sanitizeStopPayload(req.body || {});
+        await client.query('BEGIN');
+        const updated = await client.query(
+            `UPDATE stops SET recipient=COALESCE($1,recipient), company=COALESCE($2,company), address=COALESCE($3,address),
+             street=COALESCE($4,street), house_number=COALESCE($5,house_number), postal_code=COALESCE($6,postal_code),
+             city=COALESCE($7,city), country=COALESCE($8,country), address_full=COALESCE($9,address_full),
+             contact_name=COALESCE($10,contact_name), phone_number=COALESCE($11,phone_number),
+             time_window=COALESCE($12,time_window), stop_date=COALESCE($13,stop_date), notes=COALESCE($14,notes),
+             latitude=COALESCE($15,latitude), longitude=COALESCE($16,longitude), stop_type=COALESCE($17,stop_type),
+             stop_status=COALESCE($18,stop_status), updated_at=$19
+             WHERE id=$20 AND tour_id=$21 AND deleted_at IS NULL RETURNING *`,
+            [payload.recipient, payload.company, payload.address, payload.street, payload.house_number, payload.postal_code, payload.city, payload.country, payload.address_full, payload.contact_name, payload.phone_number, payload.time_window, payload.stop_date, payload.notes, payload.latitude, payload.longitude, payload.stop_type, payload.stop_status, Date.now(), req.params.stopId, req.params.id]
+        );
+        if (!updated.rows[0]) {
+            await client.query('ROLLBACK');
+            return res.sendStatus(404);
+        }
+        await recalculateTour(client, req.params.id, traceId, 'stop_updated');
+        await client.query('COMMIT');
+        await ndp.trackEvent({ traceId, eventType: 'stop_updated', title: 'Stop updated', component: 'backend', payload: { tourId: String(req.params.id), stopId: String(req.params.stopId) } });
+        res.json(updated.rows[0]);
+    } catch (error) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: 'Stop update failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+tourCoreRoutes.delete('/api/tours/:id/stops/:stopId', requireAdmin, async (req, res) => {
+    const traceId = ndp.getTraceId(req);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const deleted = await client.query(
+            `UPDATE stops SET deleted_at=$1, updated_at=$1 WHERE id=$2 AND tour_id=$3
+             AND COALESCE(stop_status, CASE WHEN is_completed THEN 'COMPLETED' ELSE 'PENDING' END) NOT IN ('COMPLETED','SKIPPED')
+             RETURNING id`,
+            [Date.now(), req.params.stopId, req.params.id]
+        );
+        if (!deleted.rows[0]) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'Closed stops cannot be deleted.' });
+        }
+        await recalculateTour(client, req.params.id, traceId, 'stop_deleted');
+        await client.query('COMMIT');
+        res.json({ success: true });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: 'Stop delete failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+tourCoreRoutes.post('/api/tours/:id/stops/reorder', requireAdmin, async (req, res) => {
+    const traceId = ndp.getTraceId(req);
+    const orderedIds = Array.isArray(req.body?.orderedStopIds) ? req.body.orderedStopIds.map(Number).filter(Number.isFinite) : [];
+    if (!orderedIds.length) return res.status(400).json({ error: 'orderedStopIds is required.' });
+    const client = await pool.connect();
+    try {
+        const now = Date.now();
+        await client.query('BEGIN');
+        for (let index = 0; index < orderedIds.length; index += 1) {
+            await client.query('UPDATE stops SET order_index=$1, updated_at=$2 WHERE id=$3 AND tour_id=$4 AND deleted_at IS NULL', [index, now, orderedIds[index], req.params.id]);
+        }
+        await recalculateTour(client, req.params.id, traceId, 'stop_reordered');
+        await client.query('COMMIT');
+        await ndp.trackEvent({ traceId, eventType: 'stop_reordered', title: 'Stops reordered', component: 'backend', payload: { tourId: String(req.params.id), stopCount: String(orderedIds.length) } });
+        res.json({ success: true });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: 'Stop reorder failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+tourCoreRoutes.post('/api/tours/:id/recalculate-route', requireAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const result = await recalculateTour(client, req.params.id, ndp.getTraceId(req), 'manual');
+        if (!result) {
+            await client.query('ROLLBACK');
+            return res.sendStatus(404);
+        }
+        await client.query('COMMIT');
+        res.json(result);
+    } catch (error) {
+        await client.query('ROLLBACK');
+        res.status(502).json({ error: 'Route calculation failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+tourCoreRoutes.get('/api/tours/:id/route', async (req, res) => {
+    const data = await getTourWithStops(pool, req.params.id);
+    if (!data) return res.sendStatus(404);
+    res.json({
+        tourId: data.tour.id,
+        status: data.tour.route_status,
+        polyline: data.tour.route_polyline,
+        plannedDistance: numberOrNull(data.tour.planned_distance_km),
+        plannedDuration: numberOrNull(data.tour.planned_duration_seconds),
+        calculatedAt: numberOrNull(data.tour.route_calculated_at),
+        error: data.tour.route_error,
+        stops: data.stops
+    });
+});
+
+tourCoreRoutes.get('/api/tours/:id/progress', async (req, res) => {
+    const data = await getTourWithStops(pool, req.params.id);
+    if (!data) return res.sendStatus(404);
+    const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
+    res.json(progress);
+});
+
+tourCoreRoutes.post('/api/tours/:id/location', async (req, res) => {
+    const traceId = ndp.getTraceId(req);
+    const data = await getTourWithStops(pool, req.params.id);
+    if (!data) return res.sendStatus(404);
+    if (textOrNull(req.body?.driverName) && req.body.driverName !== data.tour.driver_name) return res.sendStatus(403);
+    const lat = numberOrNull(req.body?.latitude);
+    const lng = numberOrNull(req.body?.longitude);
+    if (lat === null || lng === null) return res.status(400).json({ error: 'latitude and longitude are required.' });
+    const timestamp = numberOrNull(req.body?.timestamp) || Date.now();
+    await pool.query(
+        `INSERT INTO live_updates (driver_name, latitude, longitude, speed, status, current_tour, timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [data.tour.driver_name, lat, lng, numberOrNull(req.body?.speed) || 0, textOrNull(req.body?.status) || 'Vezetes', data.tour.name, timestamp]
+    );
+    const progress = await refreshProgress(pool, req.params.id);
+    await ndp.trackEvent({ traceId, eventType: 'driver_location_updated', title: 'Driver location updated', component: 'location', payload: { tourId: String(req.params.id), stale: String(progress?.locationStale || false) } });
+    res.json(progress);
+});
+
+async function markStop(req, res, status) {
+    const traceId = ndp.getTraceId(req);
+    const now = Date.now();
+    const result = await pool.query(
+        `UPDATE stops SET stop_status=$1, is_completed=$2, arrival_time=COALESCE(arrival_time,$3),
+         actual_departure_time=CASE WHEN $1='COMPLETED' THEN $3 ELSE actual_departure_time END, updated_at=$3
+         WHERE id=$4 AND tour_id=$5 AND deleted_at IS NULL RETURNING *`,
+        [status, status === 'COMPLETED', now, req.params.stopId, req.params.id]
+    );
+    if (!result.rows[0]) return res.sendStatus(404);
+    const progress = await refreshProgress(pool, req.params.id);
+    await ndp.trackEvent({ traceId, eventType: status === 'COMPLETED' ? 'stop_completed' : 'stop_arrived', title: `Stop ${status.toLowerCase()}`, component: 'backend', payload: { tourId: String(req.params.id), stopId: String(req.params.stopId) } });
+    res.json({ stop: result.rows[0], progress });
+}
+
+tourCoreRoutes.post('/api/tours/:id/stops/:stopId/arrive', async (req, res) => markStop(req, res, 'ARRIVED'));
+tourCoreRoutes.post('/api/tours/:id/stops/:stopId/complete', async (req, res) => markStop(req, res, 'COMPLETED'));
+
+tourCoreRoutes.get('/admin/tours', async (_req, res) => {
+    res.send(`<!doctype html><html><head><title>LogiHERO Tours</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+    :root{--bg:#f6faf7;--surface:#fff;--ink:#16211d;--muted:#607069;--brand:#16884f;--border:#d9e4dd;--warn:#b7791f;--err:#c73535}
+    body{font-family:Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)} header{background:#26312d;color:white;padding:18px 24px}
+    main{display:grid;grid-template-columns:360px 1fr;gap:18px;padding:18px}.panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px}
+    #map{height:560px;border-radius:8px;border:1px solid var(--border)} button{background:var(--brand);color:white;border:0;border-radius:6px;padding:9px 12px;cursor:pointer}
+    .tour{border-bottom:1px solid var(--border);padding:10px 0}.tour button{margin-top:8px}.metric{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric div{background:#edf5ef;padding:10px;border-radius:6px}
+    .status{font-size:12px;color:var(--muted)} @media(max-width:900px){main{grid-template-columns:1fr}#map{height:420px}}
+    </style></head><body><header><h1>LogiHERO Túrák</h1></header><main>
+    <section class="panel"><h2>Túralista</h2><div id="tours"></div></section>
+    <section class="panel"><h2 id="title">Térkép</h2><div class="metric" id="metrics"></div><p id="next"></p><div id="map"></div><div id="stops"></div></section>
+    </main><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+    const map=L.map('map').setView([47.5,19.04],7); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'OSM'}).addTo(map);
+    let layer=L.layerGroup().addTo(map); const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const km=v=>Number(v||0).toFixed(1)+' km'; const min=s=>Math.round(Number(s||0)/60)+' perc';
+    async function load(){const r=await fetch('/api/tours'); const tours=await r.json(); document.getElementById('tours').innerHTML=tours.map(t=>'<div class="tour"><b>'+esc(t.name)+'</b><div class="status">'+esc(t.driver_name||'')+' | '+esc(t.tour_status||'PLANNED')+'</div><button onclick="openTour('+t.id+')">Térkép</button></div>').join('')||'Nincs túra';}
+    async function openTour(id){const r=await fetch('/api/tours/'+id); const d=await r.json(); const route=await (await fetch('/api/tours/'+id+'/route')).json(); layer.clearLayers(); document.getElementById('title').textContent=d.tour.name; const p=d.progress||{};
+      document.getElementById('metrics').innerHTML='<div>Teljes<br><b>'+km(p.plannedDistance)+'</b></div><div>Hátra<br><b>'+km(p.remainingDistance)+'</b></div><div>Következőig<br><b>'+km(p.distanceToNextStop)+'</b></div><div>Idő hátra<br><b>'+min(p.remainingDuration)+'</b></div>';
+      const ns=p.nextStop; document.getElementById('next').innerHTML=ns?'<b>Következő cím:</b> '+esc(ns.recipient||ns.company||'Megálló')+'<br>'+esc(ns.address_full||ns.address||''):'Nincs több aktív megálló';
+      const bounds=[]; if(route.polyline&&route.polyline.coordinates){const latlngs=route.polyline.coordinates.map(c=>[c[1],c[0]]); L.polyline(latlngs,{color:'#16884f',weight:5}).addTo(layer); bounds.push(...latlngs);}
+      d.stops.forEach((s,i)=>{if(s.latitude&&s.longitude){const label=(s.stop_status==='COMPLETED'?'✓':s.stop_status==='PROBLEM'?'!':String(i+1)); const icon=L.divIcon({html:'<div style="background:#fff;border:2px solid #16884f;border-radius:16px;padding:3px 7px;font-weight:bold">'+label+'</div>'}); L.marker([s.latitude,s.longitude],{icon}).addTo(layer).bindPopup('<b>'+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.address_full||s.address||'')+'<br>'+esc(s.stop_status||'PENDING')+'<br><a target="_blank" href="'+esc('https://www.google.com/maps/dir/?api=1&destination='+s.latitude+','+s.longitude)+'">Navigáció</a>'); bounds.push([s.latitude,s.longitude]);}});
+      if(p.latestLocation&&p.latestLocation.latitude){L.circleMarker([p.latestLocation.latitude,p.latestLocation.longitude],{radius:8,color:'#c73535'}).addTo(layer).bindPopup(p.locationStale?'Utolsó ismert helyzet':'Aktuális pozíció'); bounds.push([p.latestLocation.latitude,p.latestLocation.longitude]);}
+      if(bounds.length) map.fitBounds(bounds,{padding:[30,30]}); document.getElementById('stops').innerHTML='<h3>Megállók</h3>'+d.stops.map((s,i)=>'<p><b>'+(i+1)+'. '+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.stop_status||'PENDING')+' | '+km(s.segment_distance_km)+' | '+min(s.segment_duration_seconds)+'</p>').join('');
+    } load();</script></body></html>`);
+});
+
+module.exports = tourCoreRoutes;

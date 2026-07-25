@@ -25,7 +25,7 @@ npm install
 npm start
 ```
 
-The backend listens on `PORT` and exposes `/health`. The admin/fleet UI is served by the same backend at `/admin/` and `/`.
+The backend listens on `PORT` and exposes `/health`. The admin/fleet UI is served by the same backend at `/admin/` and `/`. The Tour Core list and Leaflet route map are available at `/admin/tours`.
 
 ## Android
 
