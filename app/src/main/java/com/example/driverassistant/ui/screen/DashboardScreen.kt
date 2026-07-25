@@ -164,7 +164,7 @@ fun DashboardScreen(
     val sdf = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.getDefault())
     val timeSdf = SimpleDateFormat("HH:mm", Locale.getDefault())
     val driverPhotoUrl = driverPhoto?.takeIf { it.isNotBlank() }?.let {
-        if (it.startsWith("/")) "https://driverassistant.onrender.com$it" else it
+        if (it.startsWith("/")) BuildConfig.NDP_BACKEND_BASE_URL.trimEnd('/') + it else it
     }
     val logiHeroLogoId = remember(context) {
         context.resources.getIdentifier("logihero_logo", "drawable", context.packageName)
@@ -212,7 +212,7 @@ fun DashboardScreen(
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Driver Assistant",
+                                text = "LogiHERO",
                                 color = Color.White,
                                 style = MaterialTheme.typography.titleMedium
                             )
@@ -338,7 +338,7 @@ fun DashboardScreen(
                                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                 
                                 // OSM Policy: Kötelező egyedi User-Agent beállítása
-                                settings.userAgentString = "DriverAssistantApp/1.0 (com.example.driverassistant; contact: horvath.d.norbert@gmail.com)"
+                                settings.userAgentString = "LogiHERO/1.0 (com.example.driverassistant)"
 
                                 // Samsung/Modern Android fix: transzparens háttér a WebView-nak
                                 setBackgroundColor(0) 

@@ -1,104 +1,65 @@
 package com.example.driverassistant.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import com.example.driverassistant.BuildConfig
-
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-)
 
 private val LogiHeroLightColorScheme = lightColorScheme(
     primary = LogiHeroGreen,
-    onPrimary = LogiHeroBlack,
-    primaryContainer = Color(0xFFDBFBCE),
+    onPrimary = Color.White,
+    primaryContainer = LogiHeroGreenSoft,
     onPrimaryContainer = LogiHeroInk,
-    secondary = LogiHeroGreenDark,
+    secondary = LogiHeroGreenHover,
     onSecondary = Color.White,
     secondaryContainer = LogiHeroGreenSoft,
     onSecondaryContainer = LogiHeroInk,
-    tertiary = LogiHeroInk,
+    tertiary = LogiHeroHeader,
     onTertiary = Color.White,
-    background = Color.White,
+    background = LogiHeroBackground,
     onBackground = LogiHeroInk,
-    surface = Color.White,
+    surface = LogiHeroSurface,
     onSurface = LogiHeroInk,
     surfaceVariant = LogiHeroGreenSoft,
-    onSurfaceVariant = LogiHeroInk,
-    outline = Color(0xFFADC2A4),
-    error = Color(0xFFDC3545)
+    onSurfaceVariant = LogiHeroMuted,
+    outline = LogiHeroBorder,
+    error = LogiHeroError
 )
 
 private val LogiHeroDarkColorScheme = darkColorScheme(
     primary = LogiHeroGreen,
-    onPrimary = LogiHeroBlack,
-    primaryContainer = Color(0xFF1E4F0A),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF123D28),
     onPrimaryContainer = Color.White,
-    secondary = Color(0xFF96F86D),
-    onSecondary = LogiHeroBlack,
-    secondaryContainer = Color(0xFF162113),
+    secondary = Color(0xFF71D99F),
+    onSecondary = LogiHeroInk,
+    secondaryContainer = Color(0xFF172720),
     onSecondaryContainer = Color.White,
     tertiary = Color.White,
-    onTertiary = LogiHeroBlack,
-    background = LogiHeroBlack,
+    onTertiary = LogiHeroInk,
+    background = LogiHeroHeader,
     onBackground = Color.White,
-    surface = Color(0xFF101410),
+    surface = Color(0xFF18221E),
     onSurface = Color.White,
-    surfaceVariant = Color(0xFF1A2117),
+    surfaceVariant = Color(0xFF203029),
     onSurfaceVariant = Color(0xFFE4F1DF),
-    outline = Color(0xFF96F86D),
+    outline = Color(0xFF5E7569),
     error = Color(0xFFFFB4AB)
 )
 
 @Composable
 fun DriverAssistantTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        BuildConfig.IS_TEST_APP && darkTheme -> LogiHeroDarkColorScheme
-        BuildConfig.IS_TEST_APP -> LogiHeroLightColorScheme
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    val colorScheme = if (darkTheme) LogiHeroDarkColorScheme else LogiHeroLightColorScheme
 
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
+        shapes = Shapes,
         content = content
     )
 }

@@ -40,6 +40,7 @@ const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
 const { escapeHtml, escapeJsString } = require('./src/utils/escape');
 const ImportEngine = require('./src/engines/import-engine');
 const StatusEngine = require('./src/engines/status-engine');
+const ndp = require('./src/integrations/ndp-client');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 setupUploads(app);
@@ -103,7 +104,16 @@ app.use(createDriverDashboardRoutes({ escapeHtml, escapeJsString }));
 const start = async () => {
     try {
         await initDb();
-        app.listen(PORT, () => console.log('[STARTUP] Express server starting on port ' + PORT));
+        app.listen(PORT, () => {
+            console.log('[STARTUP] Express server starting on port ' + PORT);
+            ndp.trackEvent({
+                traceId: 'server-started-' + Date.now(),
+                eventType: 'server_started',
+                title: 'LogiHERO backend started',
+                component: 'backend',
+                payload: { port: String(PORT) }
+            });
+        });
     } catch (err) {
         console.error('[STARTUP] Fatal error during initDb:', err);
         process.exit(1);

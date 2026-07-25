@@ -31,7 +31,7 @@ object IntentUtils {
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = Uri.parse("mailto:")
             putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
-            putExtra(Intent.EXTRA_SUBJECT, "Driver Assistant üzenet")
+            putExtra(Intent.EXTRA_SUBJECT, "LogiHERO üzenet")
         }
         try {
             context.startActivity(intent)

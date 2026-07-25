@@ -44,7 +44,7 @@ class LocationService : Service() {
     
     private val wakeLock: PowerManager.WakeLock by lazy {
         (getSystemService(Context.POWER_SERVICE) as PowerManager).run {
-            newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DriverAssistant::LocationSync")
+            newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LogiHERO::LocationSync")
         }
     }
     
@@ -71,7 +71,7 @@ class LocationService : Service() {
         if (isTracking) return
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Driver Assistant - Aktív követés")
+            .setContentTitle("LogiHERO - Aktív követés")
             .setContentText("GPS pozíció és állapot automatikus rögzítése...")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

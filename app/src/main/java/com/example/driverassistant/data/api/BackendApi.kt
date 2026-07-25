@@ -146,7 +146,7 @@ interface BackendApi {
     suspend fun sendLiveUpdate(@Body update: LiveUpdate): LiveUpdateResponse
 
     @POST("api/sync-costs")
-    suspend fun syncCosts(@Body costs: List<Cost>)
+    suspend fun syncCosts(@Body costs: List<Cost>, @Header("X-NDP-Trace-Id") traceId: String? = null)
 
     @POST("api/sync-tours/{driverName}")
     suspend fun syncTours(@Path("driverName") driverName: String, @Body tours: List<TourWithStops>)

@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const ndp = require('../integrations/ndp-client');
 
 const costReadRoutes = express.Router();
 const costManagementRoutes = express.Router();
@@ -18,8 +19,20 @@ costReadRoutes.get('/api/get-costs/:driverName', async (req, res) => {
 });
 
 costManagementRoutes.post('/api/sync-costs', async (req, res) => {
+    const traceId = ndp.getTraceId(req);
     const client = await pool.connect();
+    const startedAt = Date.now();
     try {
+        await ndp.trackEvent({
+            traceId,
+            eventType: 'BACKEND_REQUEST_RECEIVED',
+            title: 'Cost sync request received',
+            component: 'sync',
+            payload: {
+                endpoint: 'api/sync-costs',
+                itemCount: Array.isArray(req.body) ? req.body.length : 0
+            }
+        });
         await client.query('BEGIN');
         for (const c of req.body) {
             await client.query(`INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, photo_path, status, timestamp)
@@ -37,9 +50,59 @@ costManagementRoutes.post('/api/sync-costs', async (req, res) => {
                 [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.photoPath || c.photo_path || null, c.status || null, c.timestamp]);
         }
         await client.query('COMMIT');
+        await ndp.trackEvent({
+            traceId,
+            eventType: 'DATABASE_OPERATION_SUCCEEDED',
+            source: 'DATABASE',
+            title: 'Cost sync database operation succeeded',
+            component: 'database',
+            payload: {
+                operation: 'upsert',
+                entity: 'costs',
+                status: 'success',
+                durationMs: Date.now() - startedAt,
+                affectedRecords: Array.isArray(req.body) ? req.body.length : 0
+            }
+        });
+        await ndp.trackEvent({
+            traceId,
+            eventType: 'BACKEND_RESPONSE_SENT',
+            title: 'Cost sync response sent',
+            component: 'backend',
+            payload: {
+                endpoint: 'api/sync-costs',
+                statusCode: 200
+            }
+        });
         res.sendStatus(200);
     } catch (e) {
         await client.query('ROLLBACK');
+        await ndp.trackEvent({
+            traceId,
+            eventType: 'DATABASE_OPERATION_FAILED',
+            source: 'DATABASE',
+            severity: 'ERROR',
+            title: 'Cost sync database operation failed',
+            component: 'database',
+            payload: {
+                operation: 'upsert',
+                entity: 'costs',
+                status: 'error',
+                durationMs: Date.now() - startedAt,
+                errorType: e.name || 'Error'
+            }
+        });
+        await ndp.trackEvent({
+            traceId,
+            eventType: 'BACKEND_RESPONSE_SENT',
+            severity: 'ERROR',
+            title: 'Cost sync error response sent',
+            component: 'backend',
+            payload: {
+                endpoint: 'api/sync-costs',
+                statusCode: 500
+            }
+        });
         console.error(`[SYNC-COSTS-ERROR] ${e.message}`);
         res.status(500).send(e.message);
     } finally {

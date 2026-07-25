@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.driverassistant.BuildConfig
 import com.example.driverassistant.ui.viewmodel.ProfileViewModel
 import kotlinx.coroutines.flow.collectLatest
 
@@ -99,7 +100,7 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
             if (driverPhoto != null) {
                 // Prepend base URL if it's a relative path from server
                 val displayPhoto = if (driverPhoto!!.startsWith("/")) {
-                    "https://driverassistant.onrender.com$driverPhoto"
+                    BuildConfig.NDP_BACKEND_BASE_URL.trimEnd('/') + driverPhoto
                 } else driverPhoto
 
                 androidx.compose.foundation.Image(

@@ -13,7 +13,9 @@
 .DS_Store
 ~$*.xlsx
 /build
+**/build/
 /captures
+reports/
 .externalNativeBuild
 .cxx
 local.properties

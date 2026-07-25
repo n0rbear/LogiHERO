@@ -4,7 +4,7 @@ const pool = require('../database/pool');
 const createRootRoutes = ({ escapeHtml }) => {
     const rootRoutes = express.Router();
 
-rootRoutes.get('/', async (req, res) => {
+rootRoutes.get(['/', '/admin/'], async (req, res) => {
     try {
         const driversRes = await pool.query(`
             SELECT DISTINCT ON (all_drivers.driver_name)
@@ -24,19 +24,51 @@ rootRoutes.get('/', async (req, res) => {
             ORDER BY all_drivers.driver_name, all_drivers.source_rank ASC, all_drivers.timestamp DESC
         `);
         let list = driversRes.rows.map(d => '<div class="card driver-card" data-driver-name="' + escapeHtml(d.driver_name) + '"><img src="' + escapeHtml(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;"><h3>' + escapeHtml(d.driver_name) + '</h3><p>' + escapeHtml(d.status) + (d.license_plate ? ' | ' + escapeHtml(d.license_plate) : '') + '</p></div>').join('');
-        res.send(`<html><head><title>Driver ERP</title><style>
-            body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
+        res.send(`<html><head><title>LogiHERO Admin</title><style>
+            :root {
+                --color-background: #f6faf7;
+                --color-surface: #ffffff;
+                --color-surface-muted: #edf5ef;
+                --color-header: #26312d;
+                --color-text-primary: #16211d;
+                --color-text-secondary: #607069;
+                --color-brand: #16884f;
+                --color-brand-hover: #0f6f3e;
+                --color-border: #d9e4dd;
+                --color-success: #16884f;
+                --color-warning: #b7791f;
+                --color-error: #c73535;
+                --radius-small: 4px;
+                --radius-medium: 8px;
+                --radius-large: 12px;
+                --shadow-card: 0 10px 28px rgba(22, 33, 29, 0.08);
+                --spacing-small: 8px;
+                --spacing-medium: 16px;
+                --spacing-large: 28px;
+            }
+            body { font-family: Arial, sans-serif; background: var(--color-background); color: var(--color-text-primary); padding: 40px; margin: 0; }
+            body::before { content: ""; position: fixed; inset: 0 0 auto 0; height: 88px; background: var(--color-header); z-index: -1; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-            .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; }
-            .card:hover { transform: scale(1.02); background: #444; }
+            .card { background: var(--color-surface); padding: 20px; border-radius: var(--radius-medium); cursor: pointer; border-left: 6px solid var(--color-brand); transition: 0.2s; box-shadow: var(--shadow-card); }
+            .card:hover { transform: translateY(-2px); background: var(--color-surface-muted); }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { text-align: left; padding: 12px; border-bottom: 1px solid #333; }
-            input, select { padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; }
-            .btn-admin { background: #f1c40f; color: black; padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; margin-bottom: 20px; }
+            th, td { text-align: left; padding: 12px; border-bottom: 1px solid var(--color-border); }
+            input, select { padding: 8px; background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text-primary); border-radius: var(--radius-small); }
+            .btn-admin { background: var(--color-brand); color: white; padding: 10px 20px; border-radius: var(--radius-medium); border: none; cursor: pointer; font-weight: bold; margin-bottom: 20px; }
+            .btn-admin:hover { background: var(--color-brand-hover); }
             .section { display: none; }
             .section.active { display: block; }
             #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
-            .toast { background: #2ecc71; color: white; padding: 12px 24px; border-radius: 8px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: slideIn 0.3s, fadeOut 0.5s 2.5s forwards; }
+            .toast { background: var(--color-success); color: white; padding: 12px 24px; border-radius: var(--radius-medium); margin-top: 10px; box-shadow: var(--shadow-card); animation: slideIn 0.3s, fadeOut 0.5s 2.5s forwards; }
+            h1 { color: white; letter-spacing: 0; }
+            h3 { color: var(--color-text-primary); }
+            @media (max-width: 720px) {
+                body { padding: 20px 14px; }
+                body::before { height: 120px; }
+                .grid { grid-template-columns: 1fr; }
+                table { display: block; overflow-x: auto; }
+                input, select, button { max-width: 100%; }
+            }
             @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
             @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
         </style></head>

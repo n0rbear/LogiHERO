@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.rememberAsyncImagePainter
+import com.example.driverassistant.BuildConfig
 import com.example.driverassistant.domain.model.Hotel
 import com.example.driverassistant.domain.model.Stop
 import com.example.driverassistant.domain.model.Tour
@@ -501,7 +502,7 @@ fun StopDetailsDialog(tour: Tour, stop: Stop, viewModel: ToursViewModel, onDismi
 
                 if (!stop.photoUrl.isNullOrBlank()) {
                     Text(text = "Helyszíni fotó:", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                    val photoUrl = if (stop.photoUrl.startsWith("/")) "https://driverassistant.onrender.com${stop.photoUrl}" else stop.photoUrl
+                    val photoUrl = if (stop.photoUrl.startsWith("/")) BuildConfig.NDP_BACKEND_BASE_URL.trimEnd('/') + stop.photoUrl else stop.photoUrl
                     Image(
                         painter = rememberAsyncImagePainter(photoUrl),
                         contentDescription = "Helyszíni fotó",

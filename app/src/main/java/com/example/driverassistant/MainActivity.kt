@@ -236,7 +236,7 @@ fun MainApp() {
             ModalDrawerSheet {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    if (BuildConfig.IS_TEST_APP) "LOGIHERO Driver Assistant" else "Driver Assistant",
+                    if (BuildConfig.IS_TEST_APP) "LogiHERO Test" else "LogiHERO",
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.headlineSmall
                 )
@@ -265,8 +265,8 @@ fun MainApp() {
                 CenterAlignedTopAppBar(
                     title = {
                         val title = com.example.driverassistant.ui.navigation.drawerItems
-                            .find { it.route == currentRoute }?.title ?: "Driver Assistant"
-                        Text(if (BuildConfig.IS_TEST_APP) "LOGIHERO · $title" else title)
+                            .find { it.route == currentRoute }?.title ?: "LogiHERO"
+                        Text(if (BuildConfig.IS_TEST_APP) "LogiHERO · $title" else title)
                     },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {

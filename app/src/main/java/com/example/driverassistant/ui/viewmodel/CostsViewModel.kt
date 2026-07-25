@@ -13,6 +13,8 @@ import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.util.OCRUtils
 import com.example.driverassistant.util.AiAuth
 import com.google.gson.Gson
+import com.ndp.agent.NdpAgent
+import com.ndp.agent.NdpTraceContext
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
@@ -68,6 +70,35 @@ class CostsViewModel @Inject constructor(
 
     fun addCost(amount: Double, currency: String, category: String, notes: String, photoPath: String? = null, mileage: Int? = null) {
         viewModelScope.launch {
+            val trace = NdpTraceContext()
+            NdpAgent.track(
+                eventType = "BUTTON_CLICKED",
+                title = "Cost save button clicked",
+                traceId = trace.traceId,
+                payload = mapOf("screen" to "Costs", "operation" to "save_cost", "component" to "android", "project" to "LogiHERO")
+            )
+            NdpAgent.track(
+                eventType = "VALIDATION_STARTED",
+                title = "Cost validation started",
+                traceId = trace.traceId,
+                payload = mapOf("screen" to "Costs", "component" to "android", "project" to "LogiHERO")
+            )
+            if (amount <= 0 || category.isBlank() || currency.isBlank()) {
+                NdpAgent.track(
+                    eventType = "VALIDATION_FAILED",
+                    title = "Cost validation failed",
+                    traceId = trace.traceId,
+                    severity = "ERROR",
+                    payload = mapOf("screen" to "Costs", "reason" to "invalid_required_fields", "component" to "android", "project" to "LogiHERO")
+                )
+                return@launch
+            }
+            NdpAgent.track(
+                eventType = "VALIDATION_SUCCEEDED",
+                title = "Cost validation succeeded",
+                traceId = trace.traceId,
+                payload = mapOf("screen" to "Costs", "component" to "android", "project" to "LogiHERO")
+            )
             val cost = Cost(
                 driverName = driverName,
                 amount = amount,
@@ -79,15 +110,23 @@ class CostsViewModel @Inject constructor(
                 mileage = mileage
             )
             repository.insertCost(cost)
-            syncCostsWithBackend()
+            syncCostsWithBackend(trace.traceId)
         }
     }
 
-    private fun syncCostsWithBackend() {
+    private fun syncCostsWithBackend(traceId: String? = null) {
         viewModelScope.launch {
             _isProcessing.value = true
             try {
                 android.util.Log.d("SyncDebug", "CostsViewModel: START syncCostsWithBackend")
+                traceId?.let {
+                    NdpAgent.track(
+                        eventType = "API_REQUEST_STARTED",
+                        title = "Cost sync request started",
+                        traceId = it,
+                        payload = mapOf("endpoint" to "api/sync-costs", "component" to "sync", "project" to "LogiHERO")
+                    )
+                }
                 
                 // 1. PULL remote costs
                 val remoteCosts = backendApi.getCosts(driverName)
@@ -96,11 +135,34 @@ class CostsViewModel @Inject constructor(
                 // 2. PUSH local costs
                 val allCosts = repository.getAllCosts(driverName).first()
                 android.util.Log.d("SyncDebug", "CostsViewModel: PUSH Payload")
-                backendApi.syncCosts(allCosts)
+                backendApi.syncCosts(allCosts, traceId)
+                traceId?.let {
+                    NdpAgent.track(
+                        eventType = "API_REQUEST_SUCCEEDED",
+                        title = "Cost sync request succeeded",
+                        traceId = it,
+                        payload = mapOf("endpoint" to "api/sync-costs", "itemCount" to allCosts.size, "component" to "sync", "project" to "LogiHERO")
+                    )
+                    NdpAgent.track(
+                        eventType = "UI_UPDATED",
+                        title = "Costs UI updated",
+                        traceId = it,
+                        payload = mapOf("screen" to "Costs", "component" to "android", "project" to "LogiHERO")
+                    )
+                }
                 
                 android.util.Log.d("SyncDebug", "CostsViewModel: syncCostsWithBackend COMPLETED")
             } catch (e: Exception) {
                 android.util.Log.e("SyncDebug", "CostsViewModel: Failed to sync costs with backend", e)
+                traceId?.let {
+                    NdpAgent.track(
+                        eventType = "API_REQUEST_FAILED",
+                        title = "Cost sync request failed",
+                        traceId = it,
+                        severity = "ERROR",
+                        payload = mapOf("endpoint" to "api/sync-costs", "errorType" to (e::class.simpleName ?: "Exception"), "component" to "sync", "project" to "LogiHERO")
+                    )
+                }
             } finally {
                 _isProcessing.value = false
             }

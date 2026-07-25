@@ -3,6 +3,7 @@
 import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.data.api.MistralApi
 import com.example.driverassistant.data.api.OsrmApi
+import com.example.driverassistant.BuildConfig
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -47,7 +48,7 @@ object NetworkModule {
     @Singleton
     fun provideBackendApi(client: OkHttpClient): BackendApi {
         return Retrofit.Builder()
-            .baseUrl("https://driverassistant.onrender.com/") // ÍRD ÁT A SAJÁT CÍMEDRE!
+            .baseUrl(BuildConfig.NDP_BACKEND_BASE_URL)
             .addConverterFactory(GsonConverterFactory.create())
             .client(client)
             .build()

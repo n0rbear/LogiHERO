@@ -26,6 +26,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         val mistralApiKey = System.getenv("MISTRAL_API_KEY") ?: ""
         buildConfigField("String", "MISTRAL_API_KEY", "\"${mistralApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        val ndpEndpoint = System.getenv("NDP_INGEST_ENDPOINT") ?: ""
+        val ndpIngestKey = System.getenv("NDP_INGEST_KEY") ?: ""
+        val ndpProjectId = System.getenv("NDP_PROJECT_ID") ?: "cms0g920d0001v1mom53he7pk"
+        val ndpAppName = System.getenv("NDP_APP_NAME") ?: "LogiHERO"
+        val ndpEnvironment = System.getenv("NDP_ENVIRONMENT") ?: "development"
+        val ndpBackendBaseUrl = System.getenv("NDP_BACKEND_BASE_URL") ?: "https://logihero-backend.onrender.com/"
+        buildConfigField("String", "NDP_INGEST_ENDPOINT", "\"${ndpEndpoint.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "NDP_INGEST_KEY", "\"${ndpIngestKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "NDP_PROJECT_ID", "\"${ndpProjectId.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "NDP_APP_NAME", "\"${ndpAppName.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "NDP_ENVIRONMENT", "\"${ndpEnvironment.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "NDP_BACKEND_BASE_URL", "\"${ndpBackendBaseUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     flavorDimensions += "distribution"
@@ -75,6 +87,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.hilt.navigation.compose)
+    implementation(project(":ndp-android-agent"))
 
     // Retrofit & OkHttp
     implementation(libs.retrofit.core)

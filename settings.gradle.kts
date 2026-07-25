@@ -22,6 +22,8 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Driver Assistant"
+rootProject.name = "LogiHERO"
 include(":app")
+include(":ndp-android-agent")
+project(":ndp-android-agent").projectDir = file("sdks/android-agent")
  

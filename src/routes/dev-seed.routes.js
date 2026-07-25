@@ -1,10 +1,18 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { IS_DEPLOYED } = require('../config/env');
 
 const devSeedRoutes = express.Router();
 
-devSeedRoutes.post('/admin/dev-seed-demo', requireAdmin, async (req, res) => {
+const blockDeployedDevDataChange = (req, res, next) => {
+    if (IS_DEPLOYED) {
+        return res.status(403).json({ error: 'Development seed endpoints are disabled in deployed environments.' });
+    }
+    return next();
+};
+
+devSeedRoutes.post('/admin/dev-seed-demo', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');

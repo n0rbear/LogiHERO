@@ -1,10 +1,18 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { IS_DEPLOYED } = require('../config/env');
 
 const devResetRoutes = express.Router();
 
-devResetRoutes.post('/admin/dev-reset-database', requireAdmin, async (req, res) => {
+const blockDeployedDevDataChange = (req, res, next) => {
+    if (IS_DEPLOYED) {
+        return res.status(403).json({ error: 'Development data reset endpoints are disabled in deployed environments.' });
+    }
+    return next();
+};
+
+devResetRoutes.post('/admin/dev-reset-database', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
     if (req.body?.confirm !== 'RESET_DEV_DATABASE') {
         return res.status(400).json({ error: 'Missing confirm: RESET_DEV_DATABASE' });
     }
@@ -37,7 +45,7 @@ devResetRoutes.post('/admin/dev-reset-database', requireAdmin, async (req, res) 
     }
 });
 
-devResetRoutes.post('/admin/dev-reset-demo', requireAdmin, async (req, res) => {
+devResetRoutes.post('/admin/dev-reset-demo', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
     if (req.body?.confirm !== 'RESET_DEMO_DATA') {
         return res.status(400).json({ error: 'Missing confirm: RESET_DEMO_DATA' });
     }
