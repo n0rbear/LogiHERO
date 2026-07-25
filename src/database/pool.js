@@ -1,5 +1,9 @@
 const { Pool } = require('pg');
-const { DATABASE_URL } = require('../config/env');
+const { DATABASE_URL, IS_DEPLOYED } = require('../config/env');
+
+if (IS_DEPLOYED && !DATABASE_URL) {
+    throw new Error('DATABASE_URL is required in deployed environments.');
+}
 
 const isLocalDatabase =
     !DATABASE_URL ||
