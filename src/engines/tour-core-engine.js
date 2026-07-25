@@ -4,7 +4,16 @@ const STALE_LOCATION_MS = 15 * 60 * 1000;
 
 function toNumber(value) {
     const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
+    if (!Number.isFinite(parsed)) return null;
+    // 0 / 0.0 / 0.000000 coordinates are considered invalid
+    if (Math.abs(parsed) < 0.000001) return null;
+    return parsed;
+}
+
+function isValidCoordinate(lat, lng) {
+    const nLat = toNumber(lat);
+    const nLng = toNumber(lng);
+    return nLat !== null && nLng !== null;
 }
 
 function haversineKm(a, b) {

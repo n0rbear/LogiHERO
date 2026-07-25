@@ -12,6 +12,7 @@ interface DriverRepository {
 
     fun getStopsForTour(tourId: Long): Flow<List<Stop>>
     suspend fun getStopsForTourWithDeleted(tourId: Long): List<Stop>
+    suspend fun getStopById(stopId: Long): Stop?
     suspend fun insertStop(stop: Stop)
     suspend fun updateStop(stop: Stop)
     suspend fun deleteStop(stop: Stop)

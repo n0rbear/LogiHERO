@@ -29,6 +29,9 @@ interface DriverDao {
     @Query("SELECT * FROM stops WHERE tourId = :tourId ORDER BY orderIndex ASC")
     suspend fun getStopsForTourWithDeleted(tourId: Long): List<Stop>
 
+    @Query("SELECT * FROM stops WHERE id = :stopId LIMIT 1")
+    suspend fun getStopById(stopId: Long): Stop?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertStop(stop: Stop)
 

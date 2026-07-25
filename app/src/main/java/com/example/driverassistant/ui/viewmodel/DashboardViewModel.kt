@@ -259,10 +259,10 @@ class DashboardViewModel @Inject constructor(
             val targetLat: Double
             val targetLng: Double
             
-            if (stop != null && stop.latitude != null && stop.longitude != null) {
+            if (stop != null && stop.latitude != null && stop.longitude != null && stop.latitude != 0.0) {
                 targetLat = stop.latitude
                 targetLng = stop.longitude
-            } else if (profileDepot != null) {
+            } else if (profileDepot != null && profileDepot.latitude != null && profileDepot.latitude != 0.0) {
                 targetLat = profileDepot.latitude
                 targetLng = profileDepot.longitude
             } else {
@@ -275,7 +275,10 @@ class DashboardViewModel @Inject constructor(
                 val route = response.routes.firstOrNull()
                 (route?.distance ?: 0.0) / 1000.0 to (route?.duration?.toLong() ?: 0L)
             } catch (e: Exception) {
-                null
+                // Fallback to Haversine if OSRM fails (offline)
+                val dist = haversineDistance(location.latitude, location.longitude, targetLat, targetLng)
+                val dur = (dist / 62.0 * 3600.0).toLong() // Estimate at 62 km/h
+                dist to dur
             }
         } else {
             null
@@ -292,38 +295,78 @@ class DashboardViewModel @Inject constructor(
         repository.getAllSavedLocations().map { it.find { loc -> loc.type == "BASE" } }
     ) { location, tour, stops, profileDepot ->
         if (location != null && tour != null) {
-            val incompleteStops = stops.filter { !it.isCompleted && it.latitude != null && it.longitude != null }
+            val incompleteStops = stops.filter { !it.isCompleted && it.latitude != null && it.longitude != null && it.latitude != 0.0 }
             
-            val depotLat = profileDepot?.latitude
-            val depotLng = profileDepot?.longitude
+            val depotLat = profileDepot?.latitude?.takeIf { it != 0.0 }
+            val depotLng = profileDepot?.longitude?.takeIf { it != 0.0 }
 
             if (incompleteStops.isEmpty() && (depotLat == null || depotLng == null)) return@combine null
 
+            val waypoints = mutableListOf("${location.longitude},${location.latitude}")
+            waypoints.addAll(incompleteStops.map { "${it.longitude},${it.latitude}" })
+            
+            if (depotLat != null && depotLng != null) {
+                waypoints.add("$depotLng,$depotLat")
+            }
+            
+            if (waypoints.size < 2) return@combine null
+
             try {
-                val waypoints = mutableListOf("${location.longitude},${location.latitude}")
-                waypoints.addAll(incompleteStops.map { "${it.longitude},${it.latitude}" })
-                
-                if (depotLat != null && depotLng != null) {
-                    waypoints.add("$depotLng,$depotLat")
-                }
-                
-                if (waypoints.size < 2) return@combine null
-                
                 val coords = waypoints.joinToString(";")
                 val response = osrmApi.getRoute(coords)
                 val route = response.routes.firstOrNull()
                 (route?.distance ?: 0.0) / 1000.0 to (route?.duration?.toLong() ?: 0L)
             } catch (e: Exception) {
-                null
+                // Fallback to Haversine chain
+                var totalDist = 0.0
+                var currentLat = location.latitude
+                var currentLng = location.longitude
+                
+                incompleteStops.forEach { s ->
+                    totalDist += haversineDistance(currentLat, currentLng, s.latitude!!, s.longitude!!)
+                    currentLat = s.latitude
+                    currentLng = s.longitude
+                }
+                
+                if (depotLat != null && depotLng != null) {
+                    totalDist += haversineDistance(currentLat, currentLng, depotLat, depotLng)
+                }
+                
+                val totalDur = (totalDist / 62.0 * 3600.0).toLong()
+                totalDist to totalDur
             }
         } else {
             null
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    fun arriveStop(stopId: Long) {
+        viewModelScope.launch {
+            val stop = repository.getStopById(stopId)
+            if (stop != null) {
+                repository.updateStop(stop.copy(
+                    stopStatus = "ARRIVED",
+                    arrivalTime = stop.arrivalTime ?: System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                ))
+                syncTours()
+            }
+        }
+    }
+
     fun completeStop(stopId: Long) {
         viewModelScope.launch {
-            repository.updateStopStatus(stopId, true, System.currentTimeMillis())
+            val stop = repository.getStopById(stopId)
+            if (stop != null) {
+                repository.updateStop(stop.copy(
+                    stopStatus = "COMPLETED",
+                    isCompleted = true,
+                    arrivalTime = stop.arrivalTime ?: System.currentTimeMillis(),
+                    actualDepartureTime = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                ))
+                syncTours()
+            }
         }
     }
 
@@ -427,6 +470,17 @@ class DashboardViewModel @Inject constructor(
                 android.util.Log.e("SyncDebug", "DashboardViewModel: Failed to sync work times", e)
             }
         }
+    }
+
+    private fun haversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val R = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return R * c
     }
 
     fun deleteWorkTime(workTime: WorkTime) {

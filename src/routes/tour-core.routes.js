@@ -71,16 +71,43 @@ async function persistRoute(client, tourId, route) {
     }
 }
 
-async function refreshProgress(client, tourId) {
+async function refreshProgress(client, tourId, traceId) {
     const data = await getTourWithStops(client, tourId);
     if (!data) return null;
     const live = await latestLocation(client, data.tour);
     const progress = TourCore.calculateProgress(data.tour, data.stops, live);
+
+    let newStatus = data.tour.tour_status;
+    if (newStatus === 'PLANNED' && (data.stops.some(s => s.is_completed || s.stop_status === 'ARRIVED'))) {
+        newStatus = 'IN_PROGRESS';
+        if (traceId) {
+            await ndp.trackEvent({
+                traceId,
+                eventType: 'tour_started',
+                title: 'Tour started',
+                component: 'backend',
+                payload: { tourId: String(tourId) }
+            });
+        }
+    } else if (newStatus === 'IN_PROGRESS' && data.stops.every(s => s.is_completed || s.stop_status === 'SKIPPED')) {
+        newStatus = 'COMPLETED';
+        if (traceId) {
+            await ndp.trackEvent({
+                traceId,
+                eventType: 'tour_completed',
+                title: 'Tour completed',
+                component: 'backend',
+                payload: { tourId: String(tourId) }
+            });
+        }
+    }
+
     await client.query(
         `UPDATE tours SET next_stop_id=$1, remaining_distance_km=$2, remaining_duration_seconds=$3,
          completed_distance_km=$4, last_driver_lat=COALESCE($5,last_driver_lat),
-         last_driver_lng=COALESCE($6,last_driver_lng), last_driver_location_at=COALESCE($7,last_driver_location_at)
-         WHERE id=$8`,
+         last_driver_lng=COALESCE($6,last_driver_lng), last_driver_location_at=COALESCE($7,last_driver_location_at),
+         tour_status=$8
+         WHERE id=$9`,
         [
             progress.nextStop?.id || null,
             progress.remainingDistance,
@@ -89,10 +116,11 @@ async function refreshProgress(client, tourId) {
             live?.latitude || null,
             live?.longitude || null,
             live?.timestamp || null,
+            newStatus,
             tourId
         ]
     );
-    return progress;
+    return { ...progress, status: newStatus };
 }
 
 async function recalculateTour(client, tourId, traceId, reason = 'manual') {
@@ -100,7 +128,7 @@ async function recalculateTour(client, tourId, traceId, reason = 'manual') {
     if (!data) return null;
     const route = await TourCore.calculateTourRoute(data.tour, data.stops);
     await persistRoute(client, tourId, route);
-    const progress = await refreshProgress(client, tourId);
+    const progress = await refreshProgress(client, tourId, traceId);
     await ndp.trackEvent({
         traceId,
         eventType: route.route_status === 'OK' ? 'tour_route_calculated' : 'tour_route_calculation_failed',
@@ -379,7 +407,7 @@ tourCoreRoutes.post('/api/tours/:id/location', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [data.tour.driver_name, lat, lng, numberOrNull(req.body?.speed) || 0, textOrNull(req.body?.status) || 'Vezetes', data.tour.name, timestamp]
     );
-    const progress = await refreshProgress(pool, req.params.id);
+    const progress = await refreshProgress(pool, req.params.id, traceId);
     await ndp.trackEvent({ traceId, eventType: 'driver_location_updated', title: 'Driver location updated', component: 'location', payload: { tourId: String(req.params.id), stale: String(progress?.locationStale || false) } });
     res.json(progress);
 });
@@ -394,7 +422,7 @@ async function markStop(req, res, status) {
         [status, status === 'COMPLETED', now, req.params.stopId, req.params.id]
     );
     if (!result.rows[0]) return res.sendStatus(404);
-    const progress = await refreshProgress(pool, req.params.id);
+    const progress = await refreshProgress(pool, req.params.id, traceId);
     await ndp.trackEvent({ traceId, eventType: status === 'COMPLETED' ? 'stop_completed' : 'stop_arrived', title: `Stop ${status.toLowerCase()}`, component: 'backend', payload: { tourId: String(req.params.id), stopId: String(req.params.stopId) } });
     res.json({ stop: result.rows[0], progress });
 }
@@ -422,12 +450,26 @@ tourCoreRoutes.get('/admin/tours', async (_req, res) => {
     const km=v=>Number(v||0).toFixed(1)+' km'; const min=s=>Math.round(Number(s||0)/60)+' perc';
     async function load(){const r=await fetch('/api/tours'); const tours=await r.json(); document.getElementById('tours').innerHTML=tours.map(t=>'<div class="tour"><b>'+esc(t.name)+'</b><div class="status">'+esc(t.driver_name||'')+' | '+esc(t.tour_status||'PLANNED')+'</div><button onclick="openTour('+t.id+')">Térkép</button></div>').join('')||'Nincs túra';}
     async function openTour(id){const r=await fetch('/api/tours/'+id); const d=await r.json(); const route=await (await fetch('/api/tours/'+id+'/route')).json(); layer.clearLayers(); document.getElementById('title').textContent=d.tour.name; const p=d.progress||{};
-      document.getElementById('metrics').innerHTML='<div>Teljes<br><b>'+km(p.plannedDistance)+'</b></div><div>Hátra<br><b>'+km(p.remainingDistance)+'</b></div><div>Következőig<br><b>'+km(p.distanceToNextStop)+'</b></div><div>Idő hátra<br><b>'+min(p.remainingDuration)+'</b></div>';
+      let warnHtml = '';
+      if (d.stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
+        warnHtml = '<div style="color:var(--err); background:rgba(199,53,53,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>Hiányzó koordináta!</b> Az útvonal pontatlan lehet.</div>';
+      }
+      if (p.locationStale) {
+        warnHtml += '<div style="color:var(--warn); background:rgba(183,121,31,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>GPS jel elavult!</b> (' + new Date(p.latestLocation?.timestamp).toLocaleTimeString() + ')</div>';
+      }
+      if (d.tour.route_status === 'WARNING') {
+        warnHtml += '<div style="color:var(--warn); background:rgba(183,121,31,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>OSRM hiba!</b> Légvonalbeli becslés használatban.</div>';
+      }
+
+      document.getElementById('metrics').innerHTML=warnHtml + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div>Teljes<br><b>'+km(p.plannedDistance)+'</b></div><div>Hátra<br><b>'+km(p.remainingDistance)+'</b></div><div>Következőig<br><b>'+km(p.distanceToNextStop)+'</b></div><div>Idő hátra<br><b>'+min(p.remainingDuration)+'</b></div></div>';
       const ns=p.nextStop; document.getElementById('next').innerHTML=ns?'<b>Következő cím:</b> '+esc(ns.recipient||ns.company||'Megálló')+'<br>'+esc(ns.address_full||ns.address||''):'Nincs több aktív megálló';
       const bounds=[]; if(route.polyline&&route.polyline.coordinates){const latlngs=route.polyline.coordinates.map(c=>[c[1],c[0]]); L.polyline(latlngs,{color:'#16884f',weight:5}).addTo(layer); bounds.push(...latlngs);}
-      d.stops.forEach((s,i)=>{if(s.latitude&&s.longitude){const label=(s.stop_status==='COMPLETED'?'✓':s.stop_status==='PROBLEM'?'!':String(i+1)); const icon=L.divIcon({html:'<div style="background:#fff;border:2px solid #16884f;border-radius:16px;padding:3px 7px;font-weight:bold">'+label+'</div>'}); L.marker([s.latitude,s.longitude],{icon}).addTo(layer).bindPopup('<b>'+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.address_full||s.address||'')+'<br>'+esc(s.stop_status||'PENDING')+'<br><a target="_blank" href="'+esc('https://www.google.com/maps/dir/?api=1&destination='+s.latitude+','+s.longitude)+'">Navigáció</a>'); bounds.push([s.latitude,s.longitude]);}});
+      d.stops.forEach((s,i)=>{if(s.latitude&&s.longitude&&Math.abs(s.latitude)>0.0001){const label=(s.stop_status==='COMPLETED'?'✓':s.stop_status==='PROBLEM'?'!':String(i+1)); const icon=L.divIcon({html:'<div style="background:#fff;border:2px solid #16884f;border-radius:16px;padding:3px 7px;font-weight:bold">'+label+'</div>'}); L.marker([s.latitude,s.longitude],{icon}).addTo(layer).bindPopup('<b>'+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.address_full||s.address||'')+'<br>'+esc(s.stop_status||'PENDING')+'<br><a target="_blank" href="'+esc('https://www.google.com/maps/dir/?api=1&destination='+s.latitude+','+s.longitude)+'">Navigáció</a>'); bounds.push([s.latitude,s.longitude]);}});
       if(p.latestLocation&&p.latestLocation.latitude){L.circleMarker([p.latestLocation.latitude,p.latestLocation.longitude],{radius:8,color:'#c73535'}).addTo(layer).bindPopup(p.locationStale?'Utolsó ismert helyzet':'Aktuális pozíció'); bounds.push([p.latestLocation.latitude,p.latestLocation.longitude]);}
-      if(bounds.length) map.fitBounds(bounds,{padding:[30,30]}); document.getElementById('stops').innerHTML='<h3>Megállók</h3>'+d.stops.map((s,i)=>'<p><b>'+(i+1)+'. '+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.stop_status||'PENDING')+' | '+km(s.segment_distance_km)+' | '+min(s.segment_duration_seconds)+'</p>').join('');
+      if(bounds.length) map.fitBounds(bounds,{padding:[30,30]}); document.getElementById('stops').innerHTML='<h3>Megállók</h3>'+d.stops.map((s,i)=>{
+        const warn = (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001) && s.stop_status !== 'COMPLETED' ? ' <span style="color:var(--err)">⚠️ Hiányzó koordináta</span>' : '';
+        return '<p><b>'+(i+1)+'. '+esc(s.recipient||s.company||'Megálló')+'</b>' + warn + '<br>'+esc(s.stop_status||'PENDING')+' | '+km(s.segment_distance_km)+' | '+min(s.segment_duration_seconds)+'</p>';
+      }).join('');
     } load();</script></body></html>`);
 });
 

@@ -359,11 +359,11 @@ fun DashboardScreen(
                             val safeLat = if (lat.isNaN() || lat == 0.0) 47.4979 else lat
                             val safeLng = if (lng.isNaN() || lng == 0.0) 19.0402 else lng
 
-                            val stopsJs = currentStops.filter { it.latitude != null && it.longitude != null && !it.latitude!!.isNaN() }
+                            val stopsJs = currentStops.filter { it.latitude != null && it.longitude != null && it.latitude != 0.0 && !it.latitude!!.isNaN() }
                                 .joinToString(",") { "{lat: ${it.latitude}, lng: ${it.longitude}, name: '${it.recipient.replace("'", "")}', completed: ${it.isCompleted}}" }
 
                             val depotJs = profileDepot?.let { 
-                                if (it.latitude != null && it.longitude != null) 
+                                if (it.latitude != null && it.longitude != null && it.latitude != 0.0)
                                     "{lat: ${it.latitude}, lng: ${it.longitude}, name: '${it.name.replace("'", "")}'}" 
                                 else "null" 
                             } ?: "null"
@@ -524,6 +524,7 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
             
+            /*
             if (true) {
                 Text(
                     text = if (currentTour == null) {
@@ -536,6 +537,7 @@ fun DashboardScreen(
                     modifier = Modifier.padding(16.dp)
                 )
             }
+            */
 
             Text(text = "Következő cím:", style = MaterialTheme.typography.titleMedium)
             
@@ -593,11 +595,26 @@ fun DashboardScreen(
                                     val info = TimeUtils.calculateDurationInfo(dur, drivingDone, includeRests)
                                     val formattedDur = TimeUtils.formatDuration(info.totalSeconds)
                                     Text(
-                                        text = String.format("🏁 Túra: %.1f km (%s)", dist, formattedDur),
+                                        text = String.format("🏁 Túra hátralévő: %.1f km (%s)", dist, formattedDur),
                                         style = MaterialTheme.typography.titleMedium,
                                         color = MaterialTheme.colorScheme.secondary,
                                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                                     )
+                                }
+                                
+                                currentTour?.let { t ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(
+                                            text = "📊 Összesen: %.1f km".format(t.plannedDistanceKm ?: 0.0),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color.Gray
+                                        )
+                                        Text(
+                                            text = "✅ Megtett: %.1f km".format(t.completedDistanceKm ?: 0.0),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                                 
                                 val serverData by viewModel.serverStatusData.collectAsState()
@@ -621,22 +638,33 @@ fun DashboardScreen(
                                 }
                             }
                             if (nextStop != null) {
-                                TextButton(onClick = { IntentUtils.openMaps(context, nextStop!!.addressFull.ifBlank { nextStop!!.address }) }) {
-                                    Icon(Icons.Default.Navigation, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Navigálás")
-                                }
-                                if (nextStop!!.phoneNumber.isNotBlank()) {
-                                    TextButton(onClick = { IntentUtils.dialPhoneNumber(context, nextStop!!.phoneNumber) }) {
-                                        Icon(Icons.Default.Phone, contentDescription = null)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (nextStop!!.stopStatus != "ARRIVED") {
+                                        TextButton(onClick = { viewModel.arriveStop(nextStop!!.id) }) {
+                                            Icon(Icons.Default.LocationOn, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Megérkeztem")
+                                        }
+                                    }
+                                    TextButton(onClick = { viewModel.completeStop(nextStop!!.id) }) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Hívás")
+                                        Text("Kész")
                                     }
                                 }
-                                TextButton(onClick = { viewModel.completeStop(nextStop!!.id) }) {
-                                    Icon(Icons.Default.Check, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Kész")
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = { IntentUtils.openMaps(context, nextStop!!.addressFull.ifBlank { nextStop!!.address }) }) {
+                                        Icon(Icons.Default.Navigation, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Navigálás")
+                                    }
+                                    if (nextStop!!.phoneNumber.isNotBlank()) {
+                                        TextButton(onClick = { IntentUtils.dialPhoneNumber(context, nextStop!!.phoneNumber) }) {
+                                            Icon(Icons.Default.Phone, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Hívás")
+                                        }
+                                    }
                                 }
                             } else {
                                 Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.primary)

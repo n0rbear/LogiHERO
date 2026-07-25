@@ -25,6 +25,7 @@ class DriverRepositoryImpl @Inject constructor(
         }
     }
     override suspend fun getStopsForTourWithDeleted(tourId: Long): List<Stop> = dao.getStopsForTourWithDeleted(tourId)
+    override suspend fun getStopById(stopId: Long): Stop? = dao.getStopById(stopId)
     override suspend fun insertStop(stop: Stop) = dao.insertStop(stop)
     override suspend fun updateStop(stop: Stop) = dao.updateStop(stop)
     override suspend fun deleteStop(stop: Stop) = dao.updateStop(stop.copy(deletedAt = System.currentTimeMillis()))

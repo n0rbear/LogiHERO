@@ -975,7 +975,12 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     container.innerHTML = data.map(item => {
                         const t = item.tour;
                         const stops = item.stops;
+                        const warnings = [];
+                        if (stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
+                            warnings.push('<div style="color:#e74c3c; background:rgba(231,76,60,0.1); padding:10px; border-radius:4px; margin-bottom:10px;">⚠️ <b>Hiányzó koordináta!</b> A túra útvonala hiányos lehet.</div>');
+                        }
                         return '<div class="tour-card">' +
+                            warnings.join('') +
                             '<div style="float:right; display:flex; gap:5px;">' +
                                 '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>' + allDNames.map(n => "<option value='" + esc(n) + "'>" + esc(n) + "</option>").join('') + '</select>' +
                                 '<button data-tour="' + encodeURIComponent(JSON.stringify(Object.assign({}, t, { stops }))) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">✏</button>' +
@@ -993,9 +998,14 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                 const stopAddress = s.address_full || s.address || '';
                 const stopMeta = [s.time_window, s.phone_number, s.notes].filter(Boolean).map(esc).join(' | ');
                 const stopPhoto = s.photo_url || s.photoUrl || '';
+                const isInvalidCoord = !s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001;
+                const coordWarning = isInvalidCoord && !s.is_completed ? '<span style="color:#e74c3c; font-weight:bold; margin-left:10px;">⚠️ Hiányzó koordináta</span>' : '';
+
                 return "<div class='stop-item'><b>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + esc(stopTitle) + "</b>" +
+                    coordWarning +
                     (stopAddress ? "<br><span>" + esc(stopAddress) + "</span>" : "") +
                     (stopMeta ? "<br><small style='color:#aaa;'>" + stopMeta + "</small>" : "") +
+                    (s.latitude ? "<br><small style='color:#777;'>GPS: " + s.latitude.toFixed(6) + ", " + s.longitude.toFixed(6) + "</small>" : "") +
                     (stopPhoto ? "<br><img src='" + esc(stopPhoto) + "' style='margin-top:8px;max-width:220px;max-height:140px;border-radius:6px;object-fit:cover;border:1px solid #444;'>" : "") +
                     "</div>";
             }
@@ -1454,8 +1464,7 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                 const uuid = s.uuid || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : null);
                 const items = s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s.recipient, notes: s.notes, stop_type: s.stop_type }];
                 const mainItem = items[0] || {};
-                d.dataset.lat = s.latitude || '';
-                d.dataset.lng = s.longitude || '';
+
                 d.innerHTML = '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' +
                     '<input type="hidden" class="stop-uuid" value="' + esc(uuid || '') + '">' +
                     '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">' +
@@ -1469,6 +1478,10 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     '<div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">' +
                         '<div><label>Irsz</label><input type="text" class="stop-postal" value="' + esc(s.postal_code || '') + '"></div>' +
                         '<div><label>Város</label><input type="text" class="stop-city" value="' + esc(s.city || '') + '"></div>' +
+                    '</div>' +
+                    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:4px;">' +
+                        '<div><label>Latitude (kézi)</label><input type="text" class="stop-lat" value="' + esc(s.latitude || '') + '" placeholder="pl. 47.4979"></div>' +
+                        '<div><label>Longitude (kézi)</label><input type="text" class="stop-lng" value="' + esc(s.longitude || '') + '" placeholder="pl. 19.0402"></div>' +
                     '</div>' +
                     '<div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">' +
                         '<div><label>Dátum</label><input type="date" class="stop-date" value="' + esc(dateInputValue(s.stop_date)) + '"></div>' +
@@ -1488,6 +1501,10 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                         '</div>' +
                         '<div style="margin-top:8px;"><label>Hotel megjegyzés</label><input type="text" class="stop-notes" value="' + esc(mainItem.notes || s.notes || '') + '"></div>' +
                     '</div>';
+                document.getElementById('modalStops').appendChild(d);
+                d.querySelector('.stop-type').addEventListener('change', () => toggleStopHotelFields(d));
+                toggleStopHotelFields(d);
+            }
                 document.getElementById('modalStops').appendChild(d);
                 d.querySelector('.stop-type').addEventListener('change', () => toggleStopHotelFields(d));
                 toggleStopHotelFields(d);
@@ -1535,7 +1552,13 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     const city = r.querySelector('.stop-city').value;
                     const addressFull = [street, house].filter(Boolean).join(' ') + ([postal, city].filter(Boolean).length ? ', ' + [postal, city].filter(Boolean).join(' ') : '');
 
-                    if (!r.dataset.lat || r.dataset.lat === "") {
+                    const manualLat = r.querySelector('.stop-lat')?.value;
+                    const manualLng = r.querySelector('.stop-lng')?.value;
+
+                    if (manualLat && manualLng && !isNaN(parseFloat(manualLat)) && !isNaN(parseFloat(manualLng))) {
+                        r.dataset.lat = manualLat;
+                        r.dataset.lng = manualLng;
+                    } else if (!r.dataset.lat || r.dataset.lat === "") {
                         const c = await geocode(street, house, postal, city);
                         if (c) { r.dataset.lat = c.lat; r.dataset.lng = c.lon; }
                     }

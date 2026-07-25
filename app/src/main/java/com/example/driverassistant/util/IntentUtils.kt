@@ -7,16 +7,29 @@ import android.widget.Toast
 
 object IntentUtils {
     fun openMaps(context: Context, address: String) {
-        val navigationUri = Uri.parse("google.navigation:q=${Uri.encode(address)}&mode=d")
-        val mapIntent = Intent(Intent.ACTION_VIEW, navigationUri)
-        mapIntent.setPackage("com.google.android.apps.maps")
-        if (mapIntent.resolveActivity(context.packageManager) != null) {
-            context.startActivity(mapIntent)
+        val encodedAddress = Uri.encode(address)
+        
+        // Try Google Maps Navigation first
+        val gmapsUri = Uri.parse("google.navigation:q=$encodedAddress")
+        val gmapsIntent = Intent(Intent.ACTION_VIEW, gmapsUri).setPackage("com.google.android.apps.maps")
+        
+        // Try Waze
+        val wazeUri = Uri.parse("waze://?q=$encodedAddress&navigate=yes")
+        val wazeIntent = Intent(Intent.ACTION_VIEW, wazeUri).setPackage("com.waze")
+
+        if (gmapsIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(gmapsIntent)
+        } else if (wazeIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(wazeIntent)
         } else {
-            // Fallback for any map app
-            val gmmIntentUri = Uri.parse("geo:0,0?q=${Uri.encode(address)}")
-            val fallbackIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
-            context.startActivity(fallbackIntent)
+            // Generic fallback
+            val genericUri = Uri.parse("geo:0,0?q=$encodedAddress")
+            val genericIntent = Intent(Intent.ACTION_VIEW, genericUri)
+            try {
+                context.startActivity(genericIntent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Nem található navigációs app", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
