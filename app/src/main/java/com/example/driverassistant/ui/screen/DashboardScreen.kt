@@ -45,7 +45,8 @@ import java.util.*
 fun DashboardScreen(
     viewModel: DashboardViewModel = hiltViewModel(),
     aiViewModel: com.example.driverassistant.ui.viewmodel.AIViewModel = hiltViewModel(),
-    onOpenHotels: () -> Unit = {}
+    onOpenHotels: () -> Unit = {},
+    onNavigateToCargo: (Long) -> Unit = {}
 ) {
     val currentTime = remember { mutableStateOf(System.currentTimeMillis()) }
     val workTimes by viewModel.workTimes.collectAsState()
@@ -73,8 +74,15 @@ fun DashboardScreen(
     val tourRemainingDistance by viewModel.tourRemainingDistance.collectAsState()
     val includeRests by viewModel.includeRests.collectAsState()
     val ongoingTask by viewModel.ongoingWorkTime.collectAsState()
+    val error by viewModel.error.collectAsState()
     val currentStatus = ongoingTask?.type ?: "Offline"
     val context = LocalContext.current
+
+    LaunchedEffect(error) {
+        error?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+        }
+    }
     
     var showHistory by remember { mutableStateOf(false) }
     var editingWorkTime by remember { mutableStateOf<WorkTime?>(null) }
@@ -653,6 +661,11 @@ fun DashboardScreen(
                                     }
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = { onNavigateToCargo(currentTour!!.id) }) {
+                                        Icon(Icons.Default.Inventory, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Cargos")
+                                    }
                                     TextButton(onClick = { IntentUtils.openMaps(context, nextStop!!.addressFull.ifBlank { nextStop!!.address }) }) {
                                         Icon(Icons.Default.Navigation, contentDescription = null)
                                         Spacer(modifier = Modifier.width(4.dp))

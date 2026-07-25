@@ -18,15 +18,74 @@ import com.example.driverassistant.domain.model.*
         WorkTime::class,
         SavedLocation::class,
         CustomerMapping::class,
-        ChatMessage::class
+        ChatMessage::class,
+        Cargo::class,
+        CargoEvent::class
     ],
-    version = 25,
+    version = 26,
     exportSchema = false
 )
 abstract class DriverDatabase : RoomDatabase() {
     abstract val dao: DriverDao
 
     companion object {
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `cargo` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
+                        `uuid` TEXT NOT NULL, 
+                        `tourId` INTEGER NOT NULL, 
+                        `pickupStopId` INTEGER, 
+                        `deliveryStopId` INTEGER, 
+                        `pickupStopUuid` TEXT, 
+                        `deliveryStopUuid` TEXT,
+                        `type` TEXT NOT NULL DEFAULT 'MACHINE', 
+                        `name` TEXT NOT NULL, 
+                        `description` TEXT, 
+                        `quantity` INTEGER NOT NULL DEFAULT 1, 
+                        `unit` TEXT NOT NULL DEFAULT 'pcs', 
+                        `serialNumber` TEXT, 
+                        `externalReference` TEXT, 
+                        `customerReference` TEXT, 
+                        `weightKg` REAL, 
+                        `lengthCm` REAL, 
+                        `widthCm` REAL, 
+                        `heightCm` REAL, 
+                        `status` TEXT NOT NULL DEFAULT 'PLANNED', 
+                        `conditionAtPickup` TEXT, 
+                        `conditionAtDelivery` TEXT, 
+                        `notes` TEXT, 
+                        `driverName` TEXT, 
+                        `createdAt` INTEGER NOT NULL, 
+                        `updatedAt` INTEGER NOT NULL, 
+                        `deletedAt` INTEGER, 
+                        FOREIGN KEY(`tourId`) REFERENCES `tours`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE 
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_cargo_uuid` ON `cargo` (`uuid`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_cargo_tourId` ON `cargo` (`tourId`)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `cargo_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
+                        `cargoId` INTEGER NOT NULL, 
+                        `eventType` TEXT NOT NULL, 
+                        `fromStatus` TEXT, 
+                        `toStatus` TEXT, 
+                        `actorType` TEXT, 
+                        `actorId` TEXT, 
+                        `stopId` INTEGER, 
+                        `timestamp` INTEGER NOT NULL, 
+                        `reason` TEXT, 
+                        `metadata` TEXT, 
+                        FOREIGN KEY(`cargoId`) REFERENCES `cargo`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE 
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_cargo_events_cargoId` ON `cargo_events` (`cargoId`)")
+            }
+        }
+
         val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 val tables = listOf(

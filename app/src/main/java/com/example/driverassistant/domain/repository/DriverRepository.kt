@@ -75,5 +75,19 @@ interface DriverRepository {
 
     fun getAllMessages(driverName: String): Flow<List<ChatMessage>>
     suspend fun insertMessage(message: ChatMessage)
+
+    // Cargo
+    fun getCargoForTour(tourId: Long): Flow<List<Cargo>>
+    suspend fun getCargoForTourWithDeleted(tourId: Long): List<Cargo>
+    suspend fun insertCargo(cargo: Cargo): Long
+    suspend fun updateCargo(cargo: Cargo)
+    suspend fun deleteCargo(cargo: Cargo)
+    suspend fun getCargoByUuid(uuid: String): Cargo?
+    suspend fun getCargoBySerialNumberInTour(serialNumber: String, tourId: Long): Cargo?
+    suspend fun getCargoBySerialNumberGlobally(serialNumber: String): Cargo?
+    suspend fun insertCargoEvent(event: CargoEvent)
+    fun getEventsForCargo(cargoId: Long): Flow<List<CargoEvent>>
+    suspend fun syncRemoteCargo(tourId: Long, remoteCargo: List<Cargo>)
+
     suspend fun clearAllData()
 }

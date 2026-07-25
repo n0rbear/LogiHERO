@@ -15,8 +15,11 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
     const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
     const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
+    for (let t of toursRes) {
+        t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
+        t.cargo = (await pool.query('SELECT * FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL', [t.id])).rows;
+    }
     const hotelsRes = (await pool.query(`SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT 'stop'::TEXT as source, id::INT, uuid::TEXT, COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL) AND deleted_at IS NULL AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
-    for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
     const currentTourObj = toursRes.find(t => t.is_current) || toursRes[0];
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
 
@@ -269,6 +272,11 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><input type="text" id="tDepotName" placeholder="Név"><input type="text" id="tDepotCompany" placeholder="Cég"></div>
                 <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotStreet" placeholder="Utca"><input type="text" id="tDepotHouse" placeholder="Házszám"></div>
                 <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotPostal" placeholder="Irsz"><input type="text" id="tDepotCity" placeholder="Város"></div>
+
+                <h3 style="margin-top:20px;">📦 Szállítmányok</h3>
+                <div id="modalCargo"></div>
+                <button onclick="addCargoRow()" style="background:#3498db; color:white; margin-top:10px;">+ Szállítmány</button>
+
                 <h3>Megállók</h3><div id="modalStops"></div><button onclick="addStopRow()">+ Megálló</button>
                 <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour(event)" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
             </div>
@@ -983,10 +991,15 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                             warnings.join('') +
                             '<div style="float:right; display:flex; gap:5px;">' +
                                 '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>' + allDNames.map(n => "<option value='" + esc(n) + "'>" + esc(n) + "</option>").join('') + '</select>' +
-                                '<button data-tour="' + encodeURIComponent(JSON.stringify(Object.assign({}, t, { stops }))) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">✏</button>' +
+                                '<button data-tour="' + encodeURIComponent(JSON.stringify(Object.assign({}, t, { stops, cargo }))) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">✏</button>' +
                                 '<button onclick="deleteTour(' + t.id + ')" style="background:#e74c3c; color:white;">🗑</button>' +
                             '</div>' +
                             '<b>' + esc(t.name) + '</b> (' + esc(t.customer || '') + ') - ' + new Date(Number(t.date)).toLocaleDateString() + ' ' +
+                            '<div style="margin-top:10px; display:flex; gap:10px; font-size:12px; color:#aaa;">' +
+                                '<span>📦 Szállítmány: ' + (cargo ? cargo.length : 0) + '</span>' +
+                                '<span>✅ Kézbesítve: ' + (cargo ? cargo.filter(c => c.status === 'DELIVERED').length : 0) + '</span>' +
+                                '<span>⚠️ Problémás: ' + (cargo ? cargo.filter(c => ['DAMAGED','MISSING','REJECTED'].includes(c.status)).length : 0) + '</span>' +
+                            '</div>' +
                             stops.map(renderTourStop).join('') +
                         '</div>';
                     }).join('');
@@ -1405,7 +1418,63 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
 
                 document.getElementById('modalStops').innerHTML = '';
                 if(t && t.stops) t.stops.forEach(s => addStopRow(s)); else addStopRow(null);
+
+                document.getElementById('modalCargo').innerHTML = '';
+                if(t && t.cargo) t.cargo.forEach(c => addCargoRow(c));
+
                 document.getElementById('tourModal').style.display = 'block';
+            }
+
+            function addCargoRow(c) {
+                const d = document.createElement('div');
+                d.className = 'cargo-edit-row';
+                d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative; background:rgba(255,255,255,0.02);';
+                const uuid = c ? c.uuid : (window.crypto && crypto.randomUUID ? crypto.randomUUID() : '');
+
+                // Build stop options
+                const stops = Array.from(document.querySelectorAll('.stop-edit-row')).map(r => ({
+                    uuid: r.querySelector('.stop-uuid').value,
+                    name: r.querySelector('.stop-recipient').value || r.querySelector('.stop-street').value || 'Megálló'
+                }));
+
+                const pickupOptions = stops.map(s => `<option value="${s.uuid}" ${c && c.pickup_stop_uuid === s.uuid ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+                const deliveryOptions = stops.map(s => `<option value="${s.uuid}" ${c && c.delivery_stop_uuid === s.uuid ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+
+                d.innerHTML = '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' +
+                    '<input type="hidden" class="cargo-uuid" value="' + esc(uuid) + '">' +
+                    '<div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">' +
+                        '<div><label>Megnevezés</label><input type="text" class="cargo-name" value="' + esc(c ? c.name : '') + '"></div>' +
+                        '<div><label>Típus</label><select class="cargo-type"><option value="MACHINE" '+(c&&c.type==='MACHINE'?'selected':'')+'>MACHINE</option><option value="PALLET" '+(c&&c.type==='PALLET'?'selected':'')+'>PALLET</option><option value="BOX" '+(c&&c.type==='BOX'?'selected':'')+'>BOX</option><option value="PART" '+(c&&c.type==='PART'?'selected':'')+'>PART</option><option value="VEHICLE" '+(c&&c.type==='VEHICLE'?'selected':'')+'>VEHICLE</option><option value="OTHER" '+(c&&c.type==='OTHER'?'selected':'')+'>OTHER</option></select></div>' +
+                    '</div>' +
+                    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">' +
+                        '<div><label>Sorozatszám (S/N)</label><input type="text" class="cargo-sn" value="' + esc(c ? c.serial_number : '') + '" onchange="checkSerialDuplicate(this)"></div>' +
+                        '<div><label>Ügyfél ref.</label><input type="text" class="cargo-ref" value="' + esc(c ? c.customer_reference : '') + '"></div>' +
+                    '</div>' +
+                    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">' +
+                        '<div><label>Felvételi hely (Pickup)</label><select class="cargo-pickup"><option value="">-- Válassz --</option>' + pickupOptions + '</select></div>' +
+                        '<div><label>Lerakási hely (Delivery)</label><select class="cargo-delivery"><option value="">-- Válassz --</option>' + deliveryOptions + '</select></div>' +
+                    '</div>' +
+                    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px; margin-top:10px;">' +
+                        '<div><label>Mennyiség</label><input type="number" class="cargo-qty" value="' + (c ? c.quantity : 1) + '"></div>' +
+                        '<div><label>Egység</label><input type="text" class="cargo-unit" value="' + esc(c ? c.unit : 'pcs') + '"></div>' +
+                        '<div><label>Súly (kg)</label><input type="number" class="cargo-weight" value="' + (c ? c.weight_kg : '') + '"></div>' +
+                        '<div><label>Státusz</label><select class="cargo-status"><option value="PLANNED" '+(c&&c.status==='PLANNED'?'selected':'')+'>PLANNED</option><option value="READY_FOR_PICKUP" '+(c&&c.status==='READY_FOR_PICKUP'?'selected':'')+'>READY</option><option value="PICKED_UP" '+(c&&c.status==='PICKED_UP'?'selected':'')+'>PICKED UP</option><option value="DELIVERED" '+(c&&c.status==='DELIVERED'?'selected':'')+'>DELIVERED</option></select></div>' +
+                    '</div>';
+                document.getElementById('modalCargo').appendChild(d);
+            }
+
+            async function checkSerialDuplicate(input) {
+                const sn = input.value.trim();
+                if (!sn) return;
+                // Simple local tour duplicate check
+                const rows = Array.from(document.querySelectorAll('.cargo-edit-row'));
+                const sameTourDups = rows.filter(r => r.querySelector('.cargo-sn').value.trim() === sn);
+                if (sameTourDups.length > 1) {
+                    alert('Hiba: Ez a sorozatszám már szerepel ebben a túrában!');
+                    input.style.borderColor = 'red';
+                    return;
+                }
+                // Global check (API call could be added here)
             }
 
             function normalizeStopForEditor(s) {
@@ -1587,6 +1656,24 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     });
                 }
 
+                const cargo = [];
+                const cRows = document.querySelectorAll('.cargo-edit-row');
+                for (let r of cRows) {
+                    cargo.push({
+                        uuid: r.querySelector('.cargo-uuid').value || null,
+                        name: r.querySelector('.cargo-name').value,
+                        type: r.querySelector('.cargo-type').value,
+                        serial_number: r.querySelector('.cargo-sn').value,
+                        customer_reference: r.querySelector('.cargo-ref').value,
+                        pickup_stop_uuid: r.querySelector('.cargo-pickup').value || null,
+                        delivery_stop_uuid: r.querySelector('.cargo-delivery').value || null,
+                        quantity: parseInt(r.querySelector('.cargo-qty').value) || 1,
+                        unit: r.querySelector('.cargo-unit').value,
+                        weight_kg: parseFloat(r.querySelector('.cargo-weight').value) || null,
+                        status: r.querySelector('.cargo-status').value
+                    });
+                }
+
                 const tourId = document.getElementById('tourId').value;
                 const uId = document.getElementById('tourUuid').value;
                 const tourDate = document.getElementById('tDate').value ? new Date(document.getElementById('tDate').value).getTime() : Date.now();
@@ -1600,7 +1687,8 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     depot_postal_code: document.getElementById('tDepotPostal').value, depot_city: document.getElementById('tDepotCity').value,
                     depot_lat: modal.dataset.lat ? parseFloat(modal.dataset.lat) : null,
                     depot_lng: modal.dataset.lng ? parseFloat(modal.dataset.lng) : null,
-                    stops
+                    stops,
+                    cargo
                 };
                 const res = await adminFetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
                 if(res.ok) {

@@ -62,7 +62,10 @@ private fun formatDuration(seconds: Long?): String {
 }
 
 @Composable
-fun ToursScreen(viewModel: ToursViewModel = hiltViewModel()) {
+fun ToursScreen(
+    viewModel: ToursViewModel = hiltViewModel(),
+    onNavigateToCargo: (Long) -> Unit = {}
+) {
     val tours by viewModel.tours.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
     val syncError by viewModel.syncError.collectAsState()
@@ -112,7 +115,12 @@ fun ToursScreen(viewModel: ToursViewModel = hiltViewModel()) {
                         .padding(horizontal = 16.dp)
                 ) {
                     items(tours) { tour ->
-                        TourItem(tour, viewModel, onDelete = { viewModel.deleteTour(tour) })
+                        TourItem(
+                            tour = tour, 
+                            viewModel = viewModel, 
+                            onDelete = { viewModel.deleteTour(tour) },
+                            onNavigateToCargo = onNavigateToCargo
+                        )
                     }
                 }
             }
@@ -135,7 +143,12 @@ fun ToursScreen(viewModel: ToursViewModel = hiltViewModel()) {
 }
 
 @Composable
-fun TourItem(tour: Tour, viewModel: ToursViewModel, onDelete: () -> Unit) {
+fun TourItem(
+    tour: Tour, 
+    viewModel: ToursViewModel, 
+    onDelete: () -> Unit,
+    onNavigateToCargo: (Long) -> Unit
+) {
     val context = LocalContext.current
     val sdf = SimpleDateFormat("yyyy.MM.dd", Locale.getDefault())
     var expanded by remember { mutableStateOf(false) }
@@ -193,6 +206,9 @@ fun TourItem(tour: Tour, viewModel: ToursViewModel, onDelete: () -> Unit) {
                     }
                     IconButton(onClick = { showDeleteConfirmation = true }) {
                         Icon(Icons.Default.Delete, contentDescription = "Törlés")
+                    }
+                    IconButton(onClick = { onNavigateToCargo(tour.id) }) {
+                        Icon(Icons.Default.Inventory, contentDescription = "Szállítmányok", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }

@@ -17,7 +17,7 @@ const createSyncTourRoutes = ({ ImportEngine }) => {
                     await client.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE uuid::text = $2 AND driver_name = $3', [now, item.tour.uuid, driverName]);
                     continue;
                 }
-                await ImportEngine.processTour(client, driverName, item.tour, item.stops || [], { source: 'mobile' });
+                await ImportEngine.processTour(client, driverName, item.tour, item.stops || [], { source: 'mobile', cargo: item.cargo || [] });
             }
             await client.query('COMMIT');
             res.sendStatus(200);

@@ -245,6 +245,11 @@ class DriverRepositoryImpl @Inject constructor(
                         dao.updateStop(staleStop.copy(deletedAt = remoteUpdatedAt, updatedAt = remoteUpdatedAt))
                     }
             }
+
+            // 4. Handle Cargo
+            if (remote.cargo != null) {
+                syncRemoteCargo(tourId, remote.cargo)
+            }
         }
         val finalTours = dao.getAllToursWithDeleted(driverName)
         android.util.Log.d("SyncDebug", "Local tours after sync: ${finalTours.map { it.uuid to it.isCurrent }}")
@@ -337,5 +342,44 @@ class DriverRepositoryImpl @Inject constructor(
 
     override fun getAllMessages(driverName: String): Flow<List<ChatMessage>> = dao.getAllMessages(driverName)
     override suspend fun insertMessage(message: ChatMessage) = dao.insertMessage(message)
+
+    // Cargo Implementation
+    override fun getCargoForTour(tourId: Long): Flow<List<Cargo>> = dao.getCargoForTour(tourId)
+    override suspend fun getCargoForTourWithDeleted(tourId: Long): List<Cargo> = dao.getCargoForTourWithDeleted(tourId)
+    override suspend fun insertCargo(cargo: Cargo): Long = dao.insertCargo(cargo)
+    override suspend fun updateCargo(cargo: Cargo) = dao.updateCargo(cargo)
+    override suspend fun deleteCargo(cargo: Cargo) = dao.deleteCargoById(cargo.id, System.currentTimeMillis())
+    override suspend fun getCargoByUuid(uuid: String): Cargo? = dao.getCargoByUuid(uuid)
+    override suspend fun getCargoBySerialNumberInTour(serialNumber: String, tourId: Long): Cargo? = dao.getCargoBySerialNumberInTour(serialNumber, tourId)
+    override suspend fun getCargoBySerialNumberGlobally(serialNumber: String): Cargo? = dao.getCargoBySerialNumberGlobally(serialNumber)
+    override suspend fun insertCargoEvent(event: CargoEvent) = dao.insertCargoEvent(event)
+    override fun getEventsForCargo(cargoId: Long): Flow<List<CargoEvent>> = dao.getEventsForCargo(cargoId)
+
+    override suspend fun syncRemoteCargo(tourId: Long, remoteCargo: List<Cargo>) {
+        val localCargo = dao.getCargoForTourWithDeleted(tourId)
+        val remoteByUuid = remoteCargo.associateBy { it.uuid }
+
+        for (remote in remoteCargo) {
+            val existing = localCargo.find { it.uuid == remote.uuid }
+            if (remote.deletedAt != null) {
+                if (existing != null) dao.deleteCargoById(existing.id, remote.deletedAt)
+                continue
+            }
+
+            if (existing == null) {
+                dao.insertCargo(remote.copy(id = 0, tourId = tourId))
+            } else if (remote.updatedAt > existing.updatedAt) {
+                dao.updateCargo(remote.copy(id = existing.id, tourId = tourId))
+            }
+        }
+        
+        // Deletions from remote if not in list
+        if (remoteCargo.isNotEmpty()) {
+            localCargo.filter { it.deletedAt == null && it.uuid !in remoteByUuid }.forEach { 
+                dao.deleteCargoById(it.id, System.currentTimeMillis())
+            }
+        }
+    }
+
     override suspend fun clearAllData() = dao.clearAllData()
 }

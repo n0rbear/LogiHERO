@@ -31,6 +31,7 @@ const historyRoutes = require('./src/routes/history.routes');
 const currentTourRoutes = require('./src/routes/current-tour.routes');
 const tourRoutes = require('./src/routes/tour.routes');
 const tourCoreRoutes = require('./src/routes/tour-core.routes');
+const cargoRoutes = require('./src/routes/cargo.routes');
 const adminTourRoutes = require('./src/routes/admin-tour.routes');
 const devResetRoutes = require('./src/routes/dev-reset.routes');
 const devSeedRoutes = require('./src/routes/dev-seed.routes');
@@ -87,6 +88,8 @@ app.use(createSyncTourRoutes({ ImportEngine }));
 app.use(tourRoutes);
 
 app.use(tourCoreRoutes);
+
+app.use(cargoRoutes);
 
 app.use(hotelReadRoutes);
 

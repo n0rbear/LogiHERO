@@ -72,7 +72,11 @@ class ToursViewModel @Inject constructor(
                 // 1. PUSH local changes
                 val tours = repository.getAllToursWithDeleted(driverName)
                 val toursWithStops = tours.map { t ->
-                    com.example.driverassistant.data.api.TourWithStops(t, repository.getStopsForTourWithDeleted(t.id))
+                    com.example.driverassistant.data.api.TourWithStops(
+                        t, 
+                        repository.getStopsForTourWithDeleted(t.id),
+                        repository.getCargoForTourWithDeleted(t.id)
+                    )
                 }
                 android.util.Log.d("SyncDebug", "PUSH Payload for driver: $driverName")
                 backendApi.syncTours(driverName, toursWithStops)
@@ -232,6 +236,16 @@ class ToursViewModel @Inject constructor(
 
     fun markStopCompleted(stop: Stop) {
         viewModelScope.launch {
+            // Check for pending cargo operations
+            val cargoList = repository.getCargoForTour(stop.tourId).first()
+            val pendingPickup = cargoList.filter { it.pickupStopId == stop.id && it.status == "READY_FOR_PICKUP" }
+            val pendingDelivery = cargoList.filter { it.deliveryStopId == stop.id && (it.status == "PICKED_UP" || it.status == "IN_TRANSIT") }
+
+            if (pendingPickup.isNotEmpty() || pendingDelivery.isNotEmpty()) {
+                _syncError.value = "Hiba: Ezen a megállón még van elvégzetlen szállítmány feladat!"
+                return@launch
+            }
+
             val now = System.currentTimeMillis()
             repository.updateStop(stop.copy(
                 stopStatus = "COMPLETED",

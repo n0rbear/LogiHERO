@@ -32,7 +32,8 @@ data class LiveUpdate(
 
 data class TourWithStops(
     val tour: Tour,
-    val stops: List<Stop>
+    val stops: List<Stop>,
+    val cargo: List<Cargo>? = null
 )
 
 data class CostStatusUpdate(
@@ -192,4 +193,37 @@ interface BackendApi {
 
     @POST("api/upload-stop-photo")
     suspend fun uploadStopPhoto(@Body request: StopPhotoUploadRequest): StopPhotoUploadResponse
+
+    // Cargo
+    @GET("api/tours/{tourId}/cargo")
+    suspend fun getCargoForTour(@Path("tourId") tourId: Long): List<Cargo>
+
+    @POST("api/tours/{tourId}/cargo")
+    suspend fun addCargo(@Path("tourId") tourId: Long, @Body cargo: Cargo): Cargo
+
+    @PATCH("api/cargo/{cargoId}")
+    suspend fun updateCargo(@Path("cargoId") cargoId: Long, @Body cargo: Cargo): Cargo
+
+    @DELETE("api/cargo/{cargoId}")
+    suspend fun deleteCargo(@Path("cargoId") cargoId: Long): retrofit2.Response<Unit>
+
+    @POST("api/cargo/{cargoId}/pickup")
+    suspend fun pickupCargo(@Path("cargoId") cargoId: Long, @Body request: CargoTransitionRequest): Cargo
+
+    @POST("api/cargo/{cargoId}/deliver")
+    suspend fun deliverCargo(@Path("cargoId") cargoId: Long, @Body request: CargoTransitionRequest): Cargo
+
+    @POST("api/cargo/{cargoId}/report-damage")
+    suspend fun reportDamage(@Path("cargoId") cargoId: Long, @Body request: CargoTransitionRequest): Cargo
+
+    @POST("api/cargo/{cargoId}/report-missing")
+    suspend fun reportMissing(@Path("cargoId") cargoId: Long, @Body request: CargoTransitionRequest): Cargo
 }
+
+data class CargoTransitionRequest(
+    val stopId: Long,
+    val driverName: String,
+    val condition: String? = null,
+    val reason: String? = null,
+    val metadata: String? = null
+)

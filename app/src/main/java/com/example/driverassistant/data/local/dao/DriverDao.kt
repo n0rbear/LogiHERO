@@ -102,6 +102,40 @@ interface DriverDao {
     @Query("DELETE FROM hotels WHERE uuid = :uuid")
     suspend fun deleteHotelByUuid(uuid: String)
 
+    // Cargo
+    @Query("SELECT * FROM cargo WHERE tourId = :tourId AND deletedAt IS NULL")
+    fun getCargoForTour(tourId: Long): Flow<List<Cargo>>
+
+    @Query("SELECT * FROM cargo WHERE tourId = :tourId")
+    suspend fun getCargoForTourWithDeleted(tourId: Long): List<Cargo>
+
+    @Query("SELECT * FROM cargo WHERE uuid = :uuid LIMIT 1")
+    suspend fun getCargoByUuid(uuid: String): Cargo?
+
+    @Query("SELECT * FROM cargo WHERE id = :id LIMIT 1")
+    suspend fun getCargoById(id: Long): Cargo?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCargo(cargo: Cargo): Long
+
+    @Update
+    suspend fun updateCargo(cargo: Cargo)
+
+    @Query("UPDATE cargo SET deletedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun deleteCargoById(id: Long, now: Long)
+
+    @Query("SELECT * FROM cargo WHERE serialNumber = :serialNumber AND tourId = :tourId AND deletedAt IS NULL LIMIT 1")
+    suspend fun getCargoBySerialNumberInTour(serialNumber: String, tourId: Long): Cargo?
+
+    @Query("SELECT * FROM cargo WHERE serialNumber = :serialNumber AND deletedAt IS NULL LIMIT 1")
+    suspend fun getCargoBySerialNumberGlobally(serialNumber: String): Cargo?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCargoEvent(event: CargoEvent)
+
+    @Query("SELECT * FROM cargo_events WHERE cargoId = :cargoId ORDER BY timestamp ASC")
+    fun getEventsForCargo(cargoId: Long): Flow<List<CargoEvent>>
+
     // Location
     @Query("SELECT * FROM location_history ORDER BY timestamp DESC")
     fun getLocationHistory(): Flow<List<LocationData>>

@@ -63,6 +63,50 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, address TEXT, booking_number TEXT, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, photo_url TEXT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS cargo (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            tour_id INT REFERENCES tours(id),
+            pickup_stop_id INT REFERENCES stops(id),
+            delivery_stop_id INT REFERENCES stops(id),
+            pickup_stop_uuid UUID,
+            delivery_stop_uuid UUID,
+            type TEXT DEFAULT 'MACHINE',
+            name TEXT NOT NULL,
+            description TEXT,
+            quantity INT DEFAULT 1,
+            unit TEXT DEFAULT 'pcs',
+            serial_number TEXT,
+            external_reference TEXT,
+            customer_reference TEXT,
+            weight_kg DOUBLE PRECISION,
+            length_cm DOUBLE PRECISION,
+            width_cm DOUBLE PRECISION,
+            height_cm DOUBLE PRECISION,
+            status TEXT DEFAULT 'PLANNED',
+            condition_at_pickup TEXT,
+            condition_at_delivery TEXT,
+            notes TEXT,
+            driver_name TEXT,
+            company_uuid UUID,
+            driver_uuid UUID,
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            updated_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            deleted_at BIGINT
+        )`,
+        `CREATE TABLE IF NOT EXISTS cargo_events (
+            id SERIAL PRIMARY KEY,
+            cargo_id INT REFERENCES cargo(id),
+            event_type TEXT NOT NULL,
+            from_status TEXT,
+            to_status TEXT,
+            actor_type TEXT,
+            actor_id TEXT,
+            stop_id INT REFERENCES stops(id),
+            timestamp BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            reason TEXT,
+            metadata JSONB
+        )`,
         `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
         BEGIN
             UPDATE tours SET is_current = false, updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
@@ -183,10 +227,12 @@ const initDb = async () => {
     if (defaultCompany) {
         const companyUuid = defaultCompany.uuid;
         await pool.query('UPDATE drivers SET company_uuid = $1 WHERE company_uuid IS NULL', [companyUuid]);
-        const driverLinkedTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
+        const driverLinkedTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours', 'cargo', 'cargo_events'];
         for (const table of driverLinkedTables) {
             await pool.query(`UPDATE ${table} SET company_uuid = $1 WHERE company_uuid IS NULL`, [companyUuid]);
-            await pool.query(`UPDATE ${table} t SET driver_uuid = d.uuid FROM drivers d WHERE t.driver_uuid IS NULL AND t.driver_name = d.name`);
+            if (table !== 'cargo_events') {
+                await pool.query(`UPDATE ${table} t SET driver_uuid = d.uuid FROM drivers d WHERE t.driver_uuid IS NULL AND t.driver_name = d.name`);
+            }
         }
         await pool.query(`UPDATE stops s SET company_uuid = t.company_uuid, driver_uuid = t.driver_uuid FROM tours t WHERE s.tour_id = t.id AND (s.company_uuid IS NULL OR s.driver_uuid IS NULL)`);
         const permissionRows = [

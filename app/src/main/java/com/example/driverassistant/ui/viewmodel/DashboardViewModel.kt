@@ -69,6 +69,9 @@ class DashboardViewModel @Inject constructor(
     private val _lastData = MutableStateFlow<Pair<String, Int>?>(null)
     val lastData = _lastData.asStateFlow()
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error = _error.asStateFlow()
+
     data class ServerStatusData(
         val nextDist: Float?,
         val nextDur: Long?,
@@ -150,7 +153,11 @@ class DashboardViewModel @Inject constructor(
                 // 1. PUSH local changes
                 val tours = repository.getAllToursWithDeleted(_driverName.value)
                 val toursWithStops = tours.map { t ->
-                    com.example.driverassistant.data.api.TourWithStops(t, repository.getStopsForTourWithDeleted(t.id))
+                    com.example.driverassistant.data.api.TourWithStops(
+                        t, 
+                        repository.getStopsForTourWithDeleted(t.id),
+                        repository.getCargoForTourWithDeleted(t.id)
+                    )
                 }
                 android.util.Log.d("SyncDebug", "PUSH Payload for driver: ${_driverName.value}")
                 backendApi.syncTours(_driverName.value, toursWithStops)
@@ -358,6 +365,18 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             val stop = repository.getStopById(stopId)
             if (stop != null) {
+                // Check for pending cargo operations at this stop
+                val tourId = stop.tourId
+                val cargoList = repository.getCargoForTour(tourId).first()
+                
+                val pendingPickup = cargoList.filter { it.pickupStopId == stopId && it.status == "READY_FOR_PICKUP" }
+                val pendingDelivery = cargoList.filter { it.deliveryStopId == stopId && (it.status == "PICKED_UP" || it.status == "IN_TRANSIT") }
+                
+                if (pendingPickup.isNotEmpty() || pendingDelivery.isNotEmpty()) {
+                    _error.value = "Hiba: Ezen a megállón még van elvégzetlen szállítmány feladat!"
+                    return@launch
+                }
+
                 repository.updateStop(stop.copy(
                     stopStatus = "COMPLETED",
                     isCompleted = true,

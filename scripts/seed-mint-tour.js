@@ -39,11 +39,28 @@ async function seed() {
         ];
 
         console.log('Seeding stops...');
+        const seededStops = [];
         for (const s of stops) {
-            await client.query(
+            const res = await client.query(
                 `INSERT INTO stops (company_uuid, driver_uuid, tour_id, recipient, address_full, order_index, latitude, longitude, is_completed, stop_status, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, uuid`,
                 [companyRow.uuid, driverRow.uuid, tourRow.id, s.recipient, s.address, s.order, s.lat, s.lng, s.done, s.status, now]
+            );
+            seededStops.push(res.rows[0]);
+        }
+
+        console.log('Seeding cargo...');
+        const cargoItems = [
+            { name: 'CAT Excavator 320', type: 'MACHINE', sn: 'CAT320-12345', pickup: seededStops[0], delivery: seededStops[1], status: 'PICKED_UP' },
+            { name: 'Spare Parts Box', type: 'BOX', sn: null, pickup: seededStops[1], delivery: seededStops[2], status: 'READY_FOR_PICKUP' },
+            { name: 'Electric Motor', type: 'EQUIPMENT', sn: 'MOT-9988', pickup: seededStops[1], delivery: seededStops[3], status: 'PLANNED' }
+        ];
+
+        for (const c of cargoItems) {
+            await client.query(
+                `INSERT INTO cargo (tour_id, pickup_stop_id, delivery_stop_id, pickup_stop_uuid, delivery_stop_uuid, name, type, serial_number, status, driver_name, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [tourRow.id, c.pickup.id, c.delivery.id, c.pickup.uuid, c.delivery.uuid, c.name, c.type, c.sn, c.status, driverName, now]
             );
         }
 

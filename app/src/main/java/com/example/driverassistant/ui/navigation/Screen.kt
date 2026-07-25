@@ -15,6 +15,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Settings : Screen("settings", "Beállítások", Icons.Default.Settings)
     object Report : Screen("report", "Menetlevél", Icons.Default.Assignment)
     object Stats : Screen("stats", "Összesítő", Icons.Default.BarChart)
+    object Cargo : Screen("cargo/{tourId}", "Szállítmány", Icons.Default.Inventory)
 }
 
 val bottomNavItems = if (BuildConfig.IS_TEST_APP) {

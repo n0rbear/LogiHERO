@@ -93,6 +93,54 @@ const ImportEngine = {
             }
         }
 
+        // --- CARGO SYNC ---
+        const cargoItems = options.cargo || [];
+        if (cargoItems.length > 0 || isMobileSync) {
+            const stopUuidToIdMap = (await client.query('SELECT uuid, id FROM stops WHERE tour_id = $1', [tourId])).rows.reduce((map, row) => {
+                map[String(row.uuid)] = row.id;
+                return map;
+            }, {});
+
+            for (const c of cargoItems) {
+                const pickupStopId = c.pickup_stop_id || stopUuidToIdMap[c.pickup_stop_uuid];
+                const deliveryStopId = c.delivery_stop_id || stopUuidToIdMap[c.delivery_stop_uuid];
+                const now = Date.now();
+                const cargoConflictUpdate = `
+                    tour_id=EXCLUDED.tour_id, pickup_stop_id=EXCLUDED.pickup_stop_id,
+                    delivery_stop_id=EXCLUDED.delivery_stop_id, pickup_stop_uuid=EXCLUDED.pickup_stop_uuid,
+                    delivery_stop_uuid=EXCLUDED.delivery_stop_uuid, type=EXCLUDED.type, name=EXCLUDED.name,
+                    description=EXCLUDED.description, quantity=EXCLUDED.quantity, unit=EXCLUDED.unit,
+                    serial_number=EXCLUDED.serial_number, external_reference=EXCLUDED.external_reference,
+                    customer_reference=EXCLUDED.customer_reference, weight_kg=EXCLUDED.weight_kg,
+                    length_cm=EXCLUDED.length_cm, width_cm=EXCLUDED.width_cm, height_cm=EXCLUDED.height_cm,
+                    status=EXCLUDED.status, condition_at_pickup=EXCLUDED.condition_at_pickup,
+                    condition_at_delivery=EXCLUDED.condition_at_delivery, notes=EXCLUDED.notes,
+                    driver_name=EXCLUDED.driver_name, updated_at=EXCLUDED.updated_at, deleted_at=EXCLUDED.deleted_at
+                    WHERE cargo.updated_at IS NULL OR EXCLUDED.updated_at >= cargo.updated_at
+                `;
+
+                await client.query(`
+                    INSERT INTO cargo (
+                        uuid, tour_id, pickup_stop_id, delivery_stop_id, pickup_stop_uuid, delivery_stop_uuid,
+                        type, name, description, quantity, unit, serial_number, external_reference,
+                        customer_reference, weight_kg, length_cm, width_cm, height_cm, status,
+                        condition_at_pickup, condition_at_delivery, notes, driver_name, updated_at, deleted_at
+                    ) VALUES (
+                        COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+                    ) ON CONFLICT (uuid) DO UPDATE SET ${cargoConflictUpdate}`,
+                    [
+                        c.uuid, tourId, pickupStopId, deliveryStopId, c.pickup_stop_uuid, c.delivery_stop_uuid,
+                        c.type || 'MACHINE', c.name, c.description, c.quantity || 1, c.unit || 'pcs',
+                        c.serial_number, c.external_reference, c.customer_reference,
+                        c.weight_kg, c.length_cm, c.width_cm, c.height_cm, c.status || 'PLANNED',
+                        c.condition_at_pickup, c.condition_at_delivery, c.notes, driverName,
+                        c.updated_at || c.updatedAt || now, c.deleted_at || c.deletedAt
+                    ]
+                );
+            }
+        }
+
         return tourId;
     }
 };

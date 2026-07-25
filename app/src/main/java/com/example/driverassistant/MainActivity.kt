@@ -332,10 +332,19 @@ fun MainApp() {
                                 launchSingleTop = true
                                 restoreState = true
                             }
+                        },
+                        onNavigateToCargo = { tourId ->
+                            navController.navigate("cargo/$tourId")
                         }
                     )
                 }
-                composable(Screen.Tours.route) { ToursScreen() }
+                composable(Screen.Tours.route) { 
+                    ToursScreen(
+                        onNavigateToCargo = { tourId ->
+                            navController.navigate("cargo/$tourId")
+                        }
+                    ) 
+                }
                 composable(Screen.Report.route) { TagesfahrblattScreen() }
                 composable(Screen.Stats.route) { MonthlyStatsScreen() }
                 composable(Screen.Costs.route) { CostsScreen() }
@@ -343,6 +352,13 @@ fun MainApp() {
                 composable(Screen.Chat.route) { ChatScreen() }
                 composable(Screen.Profile.route) { ProfileScreen() }
                 composable(Screen.Settings.route) { SettingsScreen() }
+                composable(Screen.Cargo.route) { backStackEntry ->
+                    val tourId = backStackEntry.arguments?.getString("tourId")?.toLongOrNull() ?: 0L
+                    CargoScreen(
+                        tourId = tourId,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
             }
         }
     }

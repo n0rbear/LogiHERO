@@ -9,7 +9,7 @@ const createAdminSaveTourRoutes = ({ ImportEngine }) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-            const tourId = await ImportEngine.processTour(client, req.body.driver_name, req.body, req.body.stops || []);
+            const tourId = await ImportEngine.processTour(client, req.body.driver_name, req.body, req.body.stops || [], { cargo: req.body.cargo || [] });
             await client.query('COMMIT');
             res.json({ success: true, tourId });
         } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).send(e.message); }
