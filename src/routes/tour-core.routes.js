@@ -122,13 +122,10 @@ const tourCoreRoutes = express.Router();
 tourCoreRoutes.get('/api/tours', async (_req, res) => {
     try {
         const result = await pool.query(
-            `SELECT t.*, lu.timestamp AS latest_location_at
-             FROM tours t
-             LEFT JOIN LATERAL (
-                SELECT timestamp FROM live_updates WHERE driver_name=t.driver_name ORDER BY timestamp DESC LIMIT 1
-             ) lu ON true
-             WHERE t.deleted_at IS NULL
-             ORDER BY COALESCE(t.planned_start_at, t.date, t.updated_at, 0) DESC`
+            `SELECT *
+             FROM tours
+             WHERE deleted_at IS NULL
+             ORDER BY id DESC`
         );
         res.json(result.rows);
     } catch (error) {
