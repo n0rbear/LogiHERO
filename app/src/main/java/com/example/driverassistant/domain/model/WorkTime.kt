@@ -12,10 +12,17 @@ import com.google.gson.annotations.SerializedName
 data class WorkTime(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val uuid: String = java.util.UUID.randomUUID().toString(),
+    val workDayUuid: String? = null,
     val driverName: String = "Ismeretlen",
     val type: String, // Munka, Vezetés, Pihenő, Rakodás
+    val status: String = "WORK",
     val startTime: Long,
     val endTime: Long? = null,
+    val durationMs: Long = if (endTime != null) endTime - startTime else 0,
+    val source: String = "ANDROID",
+    val manualEdit: Boolean = false,
+    val correctionReason: String? = null,
+    val approvalStatus: String = "PENDING",
     val date: String, // yyyy-MM-dd
     val mileage: Int? = null,
     val endMileage: Int? = null,
@@ -24,6 +31,6 @@ data class WorkTime(
     @SerializedName("created_at") val createdAt: Long = System.currentTimeMillis(),
     @SerializedName("updated_at") val updatedAt: Long = System.currentTimeMillis(),
     @SerializedName("deleted_at") val deletedAt: Long? = null,
-    @SerializedName("sync_state") val syncState: String = "SYNCED",
+    @SerializedName("sync_state") val syncState: String = "PENDING",
     val revision: Int = 1
 )

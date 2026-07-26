@@ -45,6 +45,8 @@ npm run db:down
 
 The seed script refuses to run when `NODE_ENV=production`, on Render, or when `DATABASE_URL` is not local.
 
+The development seed includes Work Time examples: an open day, closed days, driving/break/work/rest combinations, approval states, a manual correction marker, two drivers, multiple dates, and one tour-linked work day.
+
 ## Backend
 
 Start the app:

@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.data.api.OsrmApi
+import com.example.driverassistant.data.sync.DeltaSyncEngine
+import com.example.driverassistant.data.sync.DeltaSyncResult
 import com.example.driverassistant.domain.model.Hotel
 import com.example.driverassistant.domain.model.Stop
 import com.example.driverassistant.domain.model.WorkTime
@@ -24,6 +26,7 @@ class DashboardViewModel @Inject constructor(
     private val repository: DriverRepository,
     private val locationRepository: LocationRepository,
     private val backendApi: BackendApi,
+    private val deltaSyncEngine: DeltaSyncEngine,
     private val osrmApi: OsrmApi,
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -112,9 +115,27 @@ class DashboardViewModel @Inject constructor(
     }
 
     val drivingTimeTodaySeconds = workTimes.map { list ->
-        list.filter { it.type == "Vezetés" }
+        list.filter { normalizeStatus(it.status.ifBlank { it.type }) == "DRIVING" }
             .sumOf { (it.endTime ?: System.currentTimeMillis()) - it.startTime } / 1000
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    private fun normalizeStatus(value: String): String = when (value) {
+        "Vezetés", "Vezetes", "DRIVING" -> "DRIVING"
+        "Pihenő", "Piheno", "REST" -> "REST"
+        "Szünet", "Szunet", "BREAK" -> "BREAK"
+        "Rendelkezésre állás", "Rendelkezesre allas", "AVAILABILITY" -> "AVAILABILITY"
+        "Offline", "OFFLINE" -> "OFFLINE"
+        else -> "WORK"
+    }
+
+    private fun displayStatus(value: String): String = when (normalizeStatus(value)) {
+        "DRIVING" -> "Vezetés"
+        "REST" -> "Pihenő"
+        "BREAK" -> "Szünet"
+        "AVAILABILITY" -> "Rendelkezésre állás"
+        "OFFLINE" -> "Offline"
+        else -> "Munka"
+    }
 
     init {
         // Figyeljük a preferenciák változását (pl. profil szerkesztés után)
@@ -404,7 +425,8 @@ class DashboardViewModel @Inject constructor(
     }
 
     fun getTotalTime(type: String, now: Long): String {
-        val times = workTimes.value.filter { it.type == type }
+        val wanted = normalizeStatus(type)
+        val times = workTimes.value.filter { normalizeStatus(it.status.ifBlank { it.type }) == wanted }
         
         var totalMs = 0L
         times.forEach { wt ->
@@ -418,7 +440,7 @@ class DashboardViewModel @Inject constructor(
         workTimes.value.filter { it.endTime == null }
             .maxByOrNull { it.startTime }
             ?.let { latestOngoing ->
-                if (latestOngoing.type == type) {
+                if (normalizeStatus(latestOngoing.status.ifBlank { latestOngoing.type }) == wanted) {
                     totalMs += (now - latestOngoing.startTime)
                 }
             }
@@ -443,7 +465,10 @@ class DashboardViewModel @Inject constructor(
                 android.util.Log.d("StatusTrace", "  Ongoing: id=${it.id}, type=${it.type}, start=${it.startTime}")
             }
 
-            if (currentlyOngoing.any { it.type == type }) {
+            val technicalStatus = normalizeStatus(type)
+            val displayType = displayStatus(type)
+
+            if (currentlyOngoing.any { normalizeStatus(it.status.ifBlank { it.type }) == technicalStatus }) {
                 android.util.Log.d("StatusTrace", "[DashboardViewModel.updateStatus] Status $type already active, skipping insert.")
                 return@launch
             }
@@ -453,19 +478,25 @@ class DashboardViewModel @Inject constructor(
                 android.util.Log.d("StatusTrace", "[DashboardViewModel.updateStatus] Closing ongoing task: ${ongoing.type} (id=${ongoing.id})")
                 repository.updateWorkTime(ongoing.copy(
                     endTime = now, 
-                    endMileage = if (type == "Offline") mileage else ongoing.endMileage
+                    durationMs = now - ongoing.startTime,
+                    endMileage = if (technicalStatus == "OFFLINE") mileage else ongoing.endMileage,
+                    updatedAt = now,
+                    syncState = "PENDING"
                 ))
             }
             
             // 3. Új feladat indítása (ha nem kilépés)
-            if (type != "Offline") {
+            if (technicalStatus != "OFFLINE") {
                 val newWork = WorkTime(
                     driverName = currentDriverName,
-                    type = type,
+                    type = displayType,
+                    status = technicalStatus,
                     startTime = now,
                     date = today,
                     mileage = mileage,
-                    licensePlate = license_plate
+                    licensePlate = license_plate,
+                    updatedAt = now,
+                    syncState = "PENDING"
                 )
                 android.util.Log.d("StatusTrace", "[DashboardViewModel.updateStatus] Inserting new task: $type (UUID=${newWork.uuid})")
                 repository.insertWorkTime(newWork)
@@ -487,16 +518,37 @@ class DashboardViewModel @Inject constructor(
             try {
                 android.util.Log.d("SyncDebug", "DashboardViewModel: START syncWithBackend (WorkTimes)")
                 
-                // 1. PULL remote work times
-                val remoteWorkTimes = backendApi.getWorkTimes(driverName)
-                repository.syncRemoteWorkTimes(driverName, remoteWorkTimes)
-
-                // 2. PUSH local work times
-                val monthSdf = SimpleDateFormat("yyyy-MM", Locale.getDefault())
-                val currentMonth = monthSdf.format(Date())
-                repository.getWorkTimesByPattern("$currentMonth%", driverName).first().let { allTimes ->
-                    android.util.Log.d("SyncDebug", "DashboardViewModel: PUSH WorkTimes Payload")
-                    backendApi.syncWorkTimes(allTimes)
+                val pending = repository.getPendingWorkTimes(driverName).map { wt ->
+                    gson.toJsonTree(wt).asJsonObject.apply {
+                        addProperty("baseRevision", wt.revision)
+                        addProperty("type", wt.type)
+                        addProperty("status", normalizeStatus(wt.status.ifBlank { wt.type }))
+                        addProperty("start_time", wt.startTime)
+                        if (wt.endTime != null) addProperty("end_time", wt.endTime)
+                        addProperty("duration_ms", wt.durationMs)
+                        addProperty("driver_name", wt.driverName)
+                        addProperty("sync_state", wt.syncState)
+                    }
+                }
+                when (val result = deltaSyncEngine.sync(0L, mapOf("work_times" to pending))) {
+                    is DeltaSyncResult.Success -> {
+                        val remoteArray = result.pulled.changes["work_times"]
+                        val remoteWorkTimes = mutableListOf<WorkTime>()
+                        if (remoteArray != null) {
+                            for (json in remoteArray) {
+                                runCatching { gson.fromJson(json, WorkTime::class.java) }
+                                    .getOrNull()
+                                    ?.let { remoteWorkTimes.add(it) }
+                            }
+                        }
+                        repository.syncRemoteWorkTimes(driverName, remoteWorkTimes)
+                    }
+                    is DeltaSyncResult.Conflict -> {
+                        android.util.Log.w("SyncDebug", "DashboardViewModel: Work Time conflict ${result.conflict.error}")
+                    }
+                    is DeltaSyncResult.Failed -> {
+                        android.util.Log.e("SyncDebug", "DashboardViewModel: Delta Work Time sync failed", result.error)
+                    }
                 }
                 android.util.Log.d("SyncDebug", "DashboardViewModel: syncWithBackend COMPLETED")
             } catch (e: Exception) {

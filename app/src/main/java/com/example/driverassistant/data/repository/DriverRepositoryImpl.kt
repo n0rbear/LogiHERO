@@ -93,6 +93,7 @@ class DriverRepositoryImpl @Inject constructor(
     override suspend fun getAllOngoingWorkTimes(driverName: String): List<WorkTime> = dao.getAllOngoingWorkTimes(driverName)
     override fun getOngoingWorkTimesFlow(driverName: String): Flow<List<WorkTime>> = dao.getOngoingWorkTimesFlow(driverName)
     override suspend fun closeAllOngoingWorkTimes(driverName: String, endTime: Long) = dao.closeAllOngoingWorkTimes(driverName, endTime)
+    override suspend fun getPendingWorkTimes(driverName: String): List<WorkTime> = dao.getPendingWorkTimes(driverName)
 
     override suspend fun syncRemoteWorkTimes(driverName: String, remoteWorkTimes: List<WorkTime>) {
         for (remote in remoteWorkTimes) {

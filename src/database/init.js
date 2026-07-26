@@ -129,6 +129,73 @@ const initDb = async () => {
             date TEXT,
             UNIQUE(uuid)
         )`,
+        `CREATE TABLE IF NOT EXISTS work_days (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            tour_uuid UUID,
+            work_date TEXT NOT NULL,
+            start_time BIGINT NOT NULL,
+            end_time BIGINT,
+            status TEXT DEFAULT 'OPEN',
+            start_location TEXT,
+            end_location TEXT,
+            notes TEXT,
+            approval_status TEXT DEFAULT 'PENDING',
+            admin_note TEXT,
+            total_work_ms BIGINT DEFAULT 0,
+            driving_ms BIGINT DEFAULT 0,
+            break_ms BIGINT DEFAULT 0,
+            rest_ms BIGINT DEFAULT 0,
+            availability_ms BIGINT DEFAULT 0,
+            anomaly_flags TEXT[] DEFAULT '{}',
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            updated_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            deleted_at BIGINT,
+            sync_state TEXT DEFAULT 'SYNCED',
+            revision INT DEFAULT 1,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS work_time_entries (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            work_day_uuid UUID NOT NULL,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            tour_uuid UUID,
+            status TEXT NOT NULL,
+            start_time BIGINT NOT NULL,
+            end_time BIGINT,
+            duration_ms BIGINT DEFAULT 0,
+            source TEXT DEFAULT 'ANDROID',
+            manual_edit BOOLEAN DEFAULT FALSE,
+            correction_reason TEXT,
+            approval_status TEXT DEFAULT 'PENDING',
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            updated_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            deleted_at BIGINT,
+            sync_state TEXT DEFAULT 'SYNCED',
+            revision INT DEFAULT 1,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS work_time_audit (
+            id SERIAL PRIMARY KEY,
+            event_uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            work_day_uuid UUID,
+            entry_uuid UUID,
+            event_type TEXT NOT NULL,
+            old_value JSONB,
+            new_value JSONB,
+            actor_type TEXT,
+            actor_id TEXT,
+            request_id TEXT,
+            occurred_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            reason TEXT,
+            UNIQUE(event_uuid)
+        )`,
         `CREATE TABLE IF NOT EXISTS tours (
             id SERIAL PRIMARY KEY,
             uuid UUID DEFAULT gen_random_uuid() UNIQUE,
@@ -460,6 +527,13 @@ const initDb = async () => {
         ['work_times', 'deleted_at', 'BIGINT'],
         ['work_times', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
         ['work_times', 'revision', 'INT DEFAULT 1'],
+        ['work_times', 'work_day_uuid', 'UUID'],
+        ['work_times', 'status', 'TEXT'],
+        ['work_times', 'duration_ms', 'BIGINT DEFAULT 0'],
+        ['work_times', 'source', 'TEXT DEFAULT \'ANDROID\''],
+        ['work_times', 'manual_edit', 'BOOLEAN DEFAULT FALSE'],
+        ['work_times', 'correction_reason', 'TEXT'],
+        ['work_times', 'approval_status', 'TEXT DEFAULT \'PENDING\''],
         ['costs', 'created_at', 'BIGINT'],
         ['costs', 'updated_at', 'BIGINT'],
         ['costs', 'deleted_at', 'BIGINT'],
@@ -536,7 +610,7 @@ const initDb = async () => {
         }
 
         const now = Date.now();
-        const syncTables = ['drivers', 'driver_devices', 'tours', 'stops', 'hotels', 'cargo', 'work_times', 'costs'];
+        const syncTables = ['drivers', 'driver_devices', 'tours', 'stops', 'hotels', 'cargo', 'work_times', 'work_days', 'work_time_entries', 'costs'];
         for (const table of syncTables) {
             const fallbackColumn = await hasColumn(table, 'timestamp') ? 'timestamp' : 'NULL';
             if (await hasColumn(table, 'created_at')) {
@@ -595,8 +669,25 @@ const initDb = async () => {
         }
     }
 
+    const indexes = [
+        ['idx_work_days_driver_uuid', 'work_days', 'driver_uuid'],
+        ['idx_work_days_work_date', 'work_days', 'work_date'],
+        ['idx_work_days_deleted_at', 'work_days', 'deleted_at'],
+        ['idx_work_days_updated_at', 'work_days', 'updated_at'],
+        ['idx_work_days_revision', 'work_days', 'revision'],
+        ['idx_work_entries_work_day_uuid', 'work_time_entries', 'work_day_uuid'],
+        ['idx_work_entries_driver_uuid', 'work_time_entries', 'driver_uuid'],
+        ['idx_work_entries_start_time', 'work_time_entries', 'start_time'],
+        ['idx_work_entries_deleted_at', 'work_time_entries', 'deleted_at'],
+        ['idx_work_entries_updated_at', 'work_time_entries', 'updated_at'],
+        ['idx_work_entries_revision', 'work_time_entries', 'revision']
+    ];
+    for (const [name, table, column] of indexes) {
+        await pool.query(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${column})`);
+    }
+
     // 5. Schema Audit
-    const auditTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours', 'cargo', 'cargo_events', 'stops', 'drivers'];
+    const auditTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'work_days', 'work_time_entries', 'hotels', 'tours', 'cargo', 'cargo_events', 'stops', 'drivers'];
     for (const table of auditTables) {
         const res = await pool.query(
             "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'company_uuid'",

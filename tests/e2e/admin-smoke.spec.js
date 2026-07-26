@@ -88,6 +88,21 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.locator('#hotel-form button[type="submit"]').click();
     await expect(page.getByText(/Hotel mentve/i)).toBeVisible();
 
+    await page.goto('/admin/work-time');
+    await expect(page.getByRole('heading', { name: /Munkaido|Munkaidő/i })).toBeVisible();
+    await page.locator('input[name="driver"]').fill('LogiHERO Dev Driver Active');
+    await page.getByRole('button', { name: /Szures|Szűrés/i }).click();
+    await expect(page.locator('table')).toContainText('LogiHERO Dev Driver Active');
+    await page.locator('tbody tr').first().click();
+    await expect(page.getByText(/Timeline/i)).toBeVisible();
+    await page.locator('input[name="reason"]').first().fill(`E2E correction ${unique}`);
+    await page.getByRole('button', { name: /Korrekcio|Korrekció/i }).first().click();
+    await expect(page.getByText(/Korrekcio mentve|Korrekció mentve/i)).toBeVisible();
+    await page.waitForTimeout(900);
+    await expect(page.getByText(/Audit history/i)).toBeVisible();
+    await page.getByRole('button', { name: /Jovahagyas|Jóváhagyás/i }).click();
+    await expect(page.getByText(/Allapot mentve|Állapot mentve/i)).toBeVisible();
+
     await page.goto('/admin/tours');
     await expect(page.locator('#tour-map')).toBeVisible();
     await expect(page.locator('#tours-list-container')).toContainText('LogiHERO Dev');

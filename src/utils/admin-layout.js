@@ -8,7 +8,7 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
         { id: 'cargo', label: 'Cargo', icon: '📦', path: '/admin/cargo' },
         { id: 'hotels', label: 'Hotelek', icon: '🏨', path: '/admin/hotels' },
         { id: 'costs', label: 'Költségek', icon: '💶', path: '/admin/costs' },
-        { id: 'worktime', label: 'Munkaidő', icon: '⏱', path: '/admin/worktime' },
+        { id: 'worktime', label: 'Munkaidő', icon: '⏱', path: '/admin/work-time' },
         { id: 'settings', label: 'Beállítások', icon: '⚙️', path: '/admin/settings' }
     ];
 

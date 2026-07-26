@@ -254,8 +254,11 @@ interface DriverDao {
     @Query("SELECT * FROM work_times WHERE driverName = :driverName AND endTime IS NULL ORDER BY startTime DESC")
     fun getOngoingWorkTimesFlow(driverName: String): Flow<List<WorkTime>>
 
-    @Query("UPDATE work_times SET endTime = :endTime WHERE driverName = :driverName AND endTime IS NULL")
+    @Query("UPDATE work_times SET endTime = :endTime, durationMs = :endTime - startTime, updatedAt = :endTime, syncState = 'PENDING' WHERE driverName = :driverName AND endTime IS NULL")
     suspend fun closeAllOngoingWorkTimes(driverName: String, endTime: Long)
+
+    @Query("SELECT * FROM work_times WHERE driverName = :driverName AND syncState != 'SYNCED' ORDER BY updatedAt ASC")
+    suspend fun getPendingWorkTimes(driverName: String): List<WorkTime>
 
     // Customer Mappings
     @Query("SELECT * FROM customer_mappings WHERE customerName = :name")

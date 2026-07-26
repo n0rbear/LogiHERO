@@ -23,13 +23,33 @@ import com.example.driverassistant.domain.model.*
         Cargo::class,
         CargoEvent::class
     ],
-    version = 28,
+    version = 29,
     exportSchema = false
 )
 abstract class DriverDatabase : RoomDatabase() {
     abstract val dao: DriverDao
 
     companion object {
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val columns = listOf(
+                    "workDayUuid TEXT",
+                    "status TEXT NOT NULL DEFAULT 'WORK'",
+                    "durationMs INTEGER NOT NULL DEFAULT 0",
+                    "source TEXT NOT NULL DEFAULT 'ANDROID'",
+                    "manualEdit INTEGER NOT NULL DEFAULT 0",
+                    "correctionReason TEXT",
+                    "approvalStatus TEXT NOT NULL DEFAULT 'PENDING'"
+                )
+                for (column in columns) {
+                    try { db.execSQL("ALTER TABLE work_times ADD COLUMN $column") } catch (_: Exception) {}
+                }
+                db.execSQL("UPDATE work_times SET status = CASE type WHEN 'Vezetés' THEN 'DRIVING' WHEN 'Pihenő' THEN 'REST' WHEN 'Offline' THEN 'OFFLINE' ELSE COALESCE(status, 'WORK') END")
+                db.execSQL("UPDATE work_times SET durationMs = CASE WHEN endTime IS NULL THEN 0 ELSE MAX(0, endTime - startTime) END")
+                db.execSQL("UPDATE work_times SET syncState = 'PENDING' WHERE syncState IS NULL OR syncState = ''")
+            }
+        }
+
         val MIGRATION_27_28 = object : Migration(27, 28) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 val withFullSyncMeta = listOf("tours", "stops", "hotels", "cargo", "work_times", "costs")

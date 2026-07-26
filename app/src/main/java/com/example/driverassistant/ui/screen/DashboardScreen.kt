@@ -77,7 +77,14 @@ fun DashboardScreen(
     val includeRests by viewModel.includeRests.collectAsState()
     val ongoingTask by viewModel.ongoingWorkTime.collectAsState()
     val error by viewModel.error.collectAsState()
-    val currentStatus = ongoingTask?.type ?: "Offline"
+    val currentStatus = when (ongoingTask?.status ?: ongoingTask?.type) {
+        "DRIVING" -> "Vezetés"
+        "BREAK" -> "Szünet"
+        "REST" -> "Pihenő"
+        "AVAILABILITY" -> "Rendelkezésre állás"
+        "WORK" -> "Munka"
+        else -> ongoingTask?.type ?: "Offline"
+    }
     val context = LocalContext.current
 
     LaunchedEffect(error) {
@@ -723,25 +730,32 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(32.dp))
             
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                StatusButton("Pihenő", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Pihenő") { 
-                    viewModel.updateStatus("Pihenő")
-                    NotificationUtils.showSimpleNotification(context, "Munkaidő napló", "Pihenőidő elindítva")
+                StatusButton("Szünet", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Szünet") {
+                    viewModel.updateStatus("BREAK")
+                    NotificationUtils.showSimpleNotification(context, "Munkaidő napló", "Szünet elindítva")
                 }
                 StatusButton("Vezetés", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Vezetés") { 
-                    viewModel.updateStatus("Vezetés")
+                    viewModel.updateStatus("DRIVING")
                     NotificationUtils.showSimpleNotification(context, "Munkaidő napló", "Vezetés megkezdve")
                 }
-                StatusButton("Rakodás", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Rakodás") { 
-                    viewModel.updateStatus("Rakodás")
+                StatusButton("Munka", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Munka") {
+                    viewModel.updateStatus("WORK")
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                StatusButton("Munka", currentStatus, enabled = currentStatus == "Offline" || currentStatus != "Munka") { 
+                StatusButton("Pihenő", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Pihenő") {
+                    viewModel.updateStatus("REST")
+                }
+                StatusButton("Rendelkezésre", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Rendelkezésre állás") {
+                    viewModel.updateStatus("AVAILABILITY")
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                StatusButton("Műszak indítása", currentStatus, enabled = currentStatus == "Offline") {
                     if (currentStatus == "Offline") {
-                        showMileageDialog = "Munka"
-                    } else {
-                        viewModel.updateStatus("Munka")
+                        showMileageDialog = "WORK"
                     }
                 }
                 OutlinedButton(
@@ -763,8 +777,8 @@ fun DashboardScreen(
                             NotificationUtils.showSimpleNotification(context, "Műszak vége", "A mai nap rögzítve lett. Km: $mileageValue")
                         } else {
                             val msg = when(type) {
-                                "Vezetés" -> "Vezetés megkezdve"
-                                "Pihenő" -> "Pihenőidő elindítva"
+                                "DRIVING", "Vezetés" -> "Vezetés megkezdve"
+                                "REST", "Pihenő" -> "Pihenőidő elindítva"
                                 else -> "Munkaidő napló elindítva"
                             }
                             NotificationUtils.showSimpleNotification(context, "Műszak kezdése", msg)

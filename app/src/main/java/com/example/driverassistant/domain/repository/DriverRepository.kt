@@ -56,6 +56,7 @@ interface DriverRepository {
     suspend fun getAllOngoingWorkTimes(driverName: String): List<WorkTime>
     fun getOngoingWorkTimesFlow(driverName: String): Flow<List<WorkTime>>
     suspend fun closeAllOngoingWorkTimes(driverName: String, endTime: Long)
+    suspend fun getPendingWorkTimes(driverName: String): List<WorkTime>
     suspend fun syncRemoteWorkTimes(driverName: String, remoteWorkTimes: List<WorkTime>)
     suspend fun syncRemoteCosts(driverName: String, remoteCosts: List<Cost>)
 

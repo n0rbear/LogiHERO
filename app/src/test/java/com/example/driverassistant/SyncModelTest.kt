@@ -11,7 +11,9 @@ class SyncModelTest {
     fun workTimeHasOfflineFirstSyncMetadata() {
         val workTime = WorkTime(type = "Munka", startTime = 1L, date = "2026-07-26")
         assertNotNull(workTime.uuid)
-        assertEquals("SYNCED", workTime.syncState)
+        assertEquals("PENDING", workTime.syncState)
+        assertEquals("WORK", workTime.status)
+        assertEquals("PENDING", workTime.approvalStatus)
         assertEquals(1, workTime.revision)
         assertNotNull(workTime.createdAt)
         assertNotNull(workTime.updatedAt)

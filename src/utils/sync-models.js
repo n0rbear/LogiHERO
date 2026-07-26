@@ -39,7 +39,19 @@ const SYNC_TABLES = {
         entity: 'work_times',
         table: 'work_times',
         watermark: 'updated_at',
-        fields: ['uuid', 'company_uuid', 'driver_uuid', 'driver_name', 'type', 'start_time', 'end_time', 'mileage', 'end_mileage', 'license_plate', 'notes', 'date', 'created_at', 'updated_at', 'deleted_at', 'sync_state', 'revision']
+        fields: ['uuid', 'company_uuid', 'driver_uuid', 'driver_name', 'work_day_uuid', 'type', 'status', 'start_time', 'end_time', 'duration_ms', 'source', 'manual_edit', 'correction_reason', 'approval_status', 'mileage', 'end_mileage', 'license_plate', 'notes', 'date', 'created_at', 'updated_at', 'deleted_at', 'sync_state', 'revision']
+    },
+    work_days: {
+        entity: 'work_days',
+        table: 'work_days',
+        watermark: 'updated_at',
+        fields: ['uuid', 'company_uuid', 'driver_uuid', 'driver_name', 'tour_uuid', 'work_date', 'start_time', 'end_time', 'status', 'start_location', 'end_location', 'notes', 'approval_status', 'admin_note', 'total_work_ms', 'driving_ms', 'break_ms', 'rest_ms', 'availability_ms', 'anomaly_flags', 'created_at', 'updated_at', 'deleted_at', 'sync_state', 'revision']
+    },
+    work_time_entries: {
+        entity: 'work_time_entries',
+        table: 'work_time_entries',
+        watermark: 'updated_at',
+        fields: ['uuid', 'work_day_uuid', 'company_uuid', 'driver_uuid', 'driver_name', 'tour_uuid', 'status', 'start_time', 'end_time', 'duration_ms', 'source', 'manual_edit', 'correction_reason', 'approval_status', 'created_at', 'updated_at', 'deleted_at', 'sync_state', 'revision']
     },
     costs: {
         entity: 'costs',

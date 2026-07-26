@@ -10,7 +10,7 @@ Current alignment:
 - Hotel: backend/admin use `uuid`; Android historically used `publicId`. Both are treated as the public sync identity. Sprint D adds `sync_state` and `revision`.
 - Cargo: Android/backend share UUID, tour link, stop UUID links, status, dimensions, soft delete, and timestamps. Sprint D adds `sync_state` and `revision`.
 - Device: backend owns device activation state; Android sends `deviceId` during activation/unlink. Sprint D adds backend sync metadata.
-- Work Time: Android had UUID but no timestamps, delete marker, state, or revision. Sprint D adds them.
+- Work Time: Android had UUID but no timestamps, delete marker, state, or revision. Sprint D adds them. Sprint E adds first-class `work_days` and `work_time_entries`; legacy `work_times` remains synchronized for compatibility.
 - Costs: Android had UUID and timestamp but no created/updated/delete marker, state, or revision. Sprint D adds them.
 
 Main remaining naming differences:
@@ -37,7 +37,9 @@ Content-Type: application/json
 
 {
   "changes": {
-    "drivers": [{ "uuid": "...", "name": "...", "baseRevision": 1 }]
+    "drivers": [{ "uuid": "...", "name": "...", "baseRevision": 1 }],
+    "work_days": [{ "uuid": "...", "driver_uuid": "...", "status": "OPEN", "baseRevision": 1 }],
+    "work_time_entries": [{ "uuid": "...", "work_day_uuid": "...", "status": "DRIVING", "baseRevision": 1 }]
   }
 }
 ```

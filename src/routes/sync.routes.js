@@ -153,6 +153,8 @@ router.get('/api/sync/version', async (_req, res, next) => {
                 UNION ALL SELECT COALESCE(MAX(updated_at), 0) FROM hotels
                 UNION ALL SELECT COALESCE(MAX(updated_at), 0) FROM cargo
                 UNION ALL SELECT COALESCE(MAX(updated_at), 0) FROM work_times
+                UNION ALL SELECT COALESCE(MAX(updated_at), 0) FROM work_days
+                UNION ALL SELECT COALESCE(MAX(updated_at), 0) FROM work_time_entries
                 UNION ALL SELECT COALESCE(MAX(updated_at), 0) FROM costs
             ) versions
         `);

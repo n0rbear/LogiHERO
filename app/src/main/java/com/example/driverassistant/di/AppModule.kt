@@ -43,7 +43,8 @@ object AppModule {
                 DriverDatabase.MIGRATION_24_25,
                 DriverDatabase.MIGRATION_25_26,
                 DriverDatabase.MIGRATION_26_27,
-                DriverDatabase.MIGRATION_27_28
+                DriverDatabase.MIGRATION_27_28,
+                DriverDatabase.MIGRATION_28_29
             )
             .build()
     }

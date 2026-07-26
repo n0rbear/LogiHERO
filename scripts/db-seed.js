@@ -196,6 +196,114 @@ async function upsertDeviceState(client, companyUuid, driver) {
     `, [companyUuid, driver.uuid, driver.name, now]);
 }
 
+async function upsertWorkTimeSeeds(client, companyUuid, drivers, tours) {
+    const base = new Date();
+    base.setUTCHours(6, 0, 0, 0);
+    const dayStart = base.getTime();
+    const rows = [
+        {
+            uuid: '60000000-0000-4000-8000-000000000001',
+            driver: drivers[0],
+            tour: tours[0],
+            offset: 0,
+            status: 'CLOSED',
+            approval: 'APPROVED',
+            entries: [['DRIVING', 0, 2], ['BREAK', 2, 2.75], ['WORK', 2.75, 4.5]]
+        },
+        {
+            uuid: '60000000-0000-4000-8000-000000000002',
+            driver: drivers[0],
+            tour: null,
+            offset: -86400000,
+            status: 'CLOSED',
+            approval: 'REJECTED',
+            adminNote: 'Seed rejected day',
+            entries: [['WORK', 0, 1.5], ['DRIVING', 1.5, 3.5], ['REST', 3.5, 4.5]]
+        },
+        {
+            uuid: '60000000-0000-4000-8000-000000000003',
+            driver: drivers[1],
+            tour: null,
+            offset: 0,
+            status: 'OPEN',
+            approval: 'PENDING',
+            entries: [['AVAILABILITY', 0, null]]
+        },
+        {
+            uuid: '60000000-0000-4000-8000-000000000004',
+            driver: drivers[0],
+            tour: null,
+            offset: -172800000,
+            status: 'CLOSED',
+            approval: 'CORRECTION_REQUIRED',
+            adminNote: 'Manual correction seed',
+            anomalyFlags: ['MANUAL_CORRECTION'],
+            entries: [['DRIVING', 0, 1], ['WORK', 1, 2]]
+        }
+    ];
+    for (const day of rows) {
+        const start = dayStart + day.offset;
+        const end = day.status === 'OPEN' ? null : start + 5 * 60 * 60 * 1000;
+        await client.query(`
+            INSERT INTO work_days (uuid, company_uuid, driver_uuid, driver_name, tour_uuid, work_date, start_time, end_time, status,
+                start_location, end_location, notes, approval_status, admin_note, anomaly_flags, updated_at)
+            VALUES ($1, $2, $3, $4, $5::UUID, $6, $7, $8, $9, 'Depot', 'Depot', 'Seeded work day', $10, $11, $12, $13)
+            ON CONFLICT (uuid) DO UPDATE SET
+                driver_uuid = EXCLUDED.driver_uuid,
+                driver_name = EXCLUDED.driver_name,
+                tour_uuid = EXCLUDED.tour_uuid,
+                work_date = EXCLUDED.work_date,
+                start_time = EXCLUDED.start_time,
+                end_time = EXCLUDED.end_time,
+                status = EXCLUDED.status,
+                approval_status = EXCLUDED.approval_status,
+                admin_note = EXCLUDED.admin_note,
+                anomaly_flags = EXCLUDED.anomaly_flags,
+                updated_at = EXCLUDED.updated_at
+        `, [day.uuid, companyUuid, day.driver.uuid, day.driver.name, day.tour?.uuid || null, new Date(start).toISOString().slice(0, 10), start, end, day.status, day.approval, day.adminNote || null, day.anomalyFlags || [], Date.now()]);
+
+        for (let index = 0; index < day.entries.length; index += 1) {
+            const [status, fromHour, toHour] = day.entries[index];
+            const entryStart = start + Math.round(fromHour * 3600000);
+            const entryEnd = toHour == null ? null : start + Math.round(toHour * 3600000);
+            await client.query(`
+                INSERT INTO work_time_entries (uuid, work_day_uuid, company_uuid, driver_uuid, driver_name, tour_uuid, status, start_time, end_time, duration_ms,
+                    source, manual_edit, correction_reason, approval_status, updated_at)
+                VALUES ($1, $2::UUID, $3, $4, $5, $6::UUID, $7, $8, $9, COALESCE($9::BIGINT - $8::BIGINT, 0), 'ANDROID', $10, $11, $12, $13)
+                ON CONFLICT (uuid) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    start_time = EXCLUDED.start_time,
+                    end_time = EXCLUDED.end_time,
+                    duration_ms = EXCLUDED.duration_ms,
+                    manual_edit = EXCLUDED.manual_edit,
+                    correction_reason = EXCLUDED.correction_reason,
+                    approval_status = EXCLUDED.approval_status,
+                    updated_at = EXCLUDED.updated_at
+            `, [`70000000-0000-4000-8000-${String(Number(day.uuid.slice(-12)) + index).padStart(12, '0')}`, day.uuid, companyUuid, day.driver.uuid, day.driver.name, day.tour?.uuid || null, status, entryStart, entryEnd, day.uuid.endsWith('0004') && index === 1, day.uuid.endsWith('0004') && index === 1 ? 'Seed manual correction' : null, day.approval, Date.now()]);
+        }
+        await client.query(`
+            UPDATE work_days d SET
+                total_work_ms = COALESCE(s.total_work_ms, 0),
+                driving_ms = COALESCE(s.driving_ms, 0),
+                break_ms = COALESCE(s.break_ms, 0),
+                rest_ms = COALESCE(s.rest_ms, 0),
+                availability_ms = COALESCE(s.availability_ms, 0),
+                updated_at = $2
+            FROM (
+                SELECT work_day_uuid,
+                    SUM(CASE WHEN status IN ('WORK','DRIVING','BREAK','REST','AVAILABILITY') THEN COALESCE(duration_ms, 0) ELSE 0 END) AS total_work_ms,
+                    SUM(CASE WHEN status = 'DRIVING' THEN COALESCE(duration_ms, 0) ELSE 0 END) AS driving_ms,
+                    SUM(CASE WHEN status = 'BREAK' THEN COALESCE(duration_ms, 0) ELSE 0 END) AS break_ms,
+                    SUM(CASE WHEN status = 'REST' THEN COALESCE(duration_ms, 0) ELSE 0 END) AS rest_ms,
+                    SUM(CASE WHEN status = 'AVAILABILITY' THEN COALESCE(duration_ms, 0) ELSE 0 END) AS availability_ms
+                FROM work_time_entries WHERE work_day_uuid = $1 GROUP BY work_day_uuid
+            ) s
+            WHERE d.uuid = s.work_day_uuid
+        `, [day.uuid, Date.now()]);
+        await client.query('INSERT INTO work_time_audit (event_uuid, work_day_uuid, event_type, actor_type, actor_id, request_id, occurred_at, reason) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) ON CONFLICT (event_uuid) DO NOTHING', [day.uuid, 'SEED_CREATED', 'SYSTEM', 'seed', 'seed', Date.now(), 'Development seed']);
+    }
+}
+
 (async () => {
     assertSafeSeedTarget();
     await initDb();
@@ -207,6 +315,7 @@ async function upsertDeviceState(client, companyUuid, driver) {
         const tours = await upsertTours(client, companyUuid, drivers[0]);
         await upsertStopsCargoHotels(client, companyUuid, drivers[0], tours[0]);
         await upsertDeviceState(client, companyUuid, drivers[0]);
+        await upsertWorkTimeSeeds(client, companyUuid, drivers, tours);
         await client.query('COMMIT');
         console.log('[DB] seed complete');
     } catch (error) {

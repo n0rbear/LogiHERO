@@ -599,7 +599,7 @@ adminRoutes.post('/api/drivers/:uuid/regenerate', requireAdmin, async (req, res)
 
 // --- 6. Placeholders ---
 
-const placeholders = ['cargo', 'costs', 'worktime', 'work-times', 'settings'];
+const placeholders = ['cargo', 'costs', 'settings'];
 placeholders.forEach(p => {
     adminRoutes.get('/' + p, requireAdmin, (req, res) => {
         const labels = { 'cargo': 'Cargo', 'costs': 'Költségek', 'worktime': 'Munkaidő', 'work-times': 'Munkaidő', 'settings': 'Beállítások' };
