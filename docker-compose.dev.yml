@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: logihero-postgres-dev
+    environment:
+      POSTGRES_DB: logihero_dev
+      POSTGRES_USER: logihero_dev
+      POSTGRES_PASSWORD: logihero_dev_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logihero_dev -d logihero_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - logihero_postgres_dev:/var/lib/postgresql/data
+
+volumes:
+  logihero_postgres_dev:

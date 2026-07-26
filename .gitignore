@@ -33,3 +33,6 @@ backups/
 npm-debug.log*
 Thumbs.db
 .idea/
+test-results/
+playwright-report/
+blob-report/

@@ -40,15 +40,24 @@ const adminTransferTourRoutes = require('./src/routes/admin-transfer-tour.routes
 const adminRoutes = require('./src/routes/admin.routes');
 const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
+const {
+    requestIdMiddleware,
+    adminNoStoreMiddleware,
+    errorHandler
+} = require('./src/middleware/http-hardening');
 const { escapeHtml, escapeJsString } = require('./src/utils/escape');
 const ImportEngine = require('./src/engines/import-engine');
 const StatusEngine = require('./src/engines/status-engine');
 const ndp = require('./src/integrations/ndp-client');
 
 const app = express();
+app.disable('x-powered-by');
+app.use(requestIdMiddleware);
+app.use(adminNoStoreMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 setupUploads(app);
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
 // Public Assets & Routes
 app.use(downloadRoutes);
@@ -90,16 +99,23 @@ app.use(devSeedRoutes);
 // Public Root & Driver Dashboard
 app.use(createRootRoutes());
 app.use(createDriverDashboardRoutes({ escapeHtml, escapeJsString }));
+app.use(errorHandler);
 
 const start = async () => {
     try {
         await initDb();
-        app.listen(PORT, () => {
+        const server = app.listen(PORT, () => {
             console.log('[STARTUP] LogiHERO server starting on port ' + PORT);
         });
+        return server;
     } catch (err) {
         console.error('[STARTUP] Fatal error during initDb:', err);
         process.exit(1);
     }
 };
-start();
+
+if (require.main === module) {
+    start();
+}
+
+module.exports = { app, start };

@@ -4,6 +4,7 @@ const renderAdminLayout = require('../utils/admin-layout');
 const requireAdmin = require('../middleware/requireAdmin');
 const { ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
 const { escapeHtml } = require('../utils/escape');
+const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
 const {
     createAdminSession,
     destroyAdminSession,
@@ -452,10 +453,10 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
             .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:10000; }
             .modal-backdrop.open { display:flex; }
             .modal-panel { background:white; width:min(920px, calc(100vw - 32px)); max-height:calc(100vh - 48px); overflow:auto; border-radius:8px; padding:24px; }
+            ${renderAdminMapStyles()}
         `;
         const driverOptions = drivers.map(d => `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('');
         const content = `
-            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
             <div class="hotel-main">
                 <div class="hotel-sidebar">
                     <div class="card" style="padding:16px;">
@@ -511,7 +512,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
             </div>
         `;
         const scripts = `
-            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+            ${renderAdminMapScript()}
             <script>
                 const hotels = ${scriptJson(hotels)};
                 const map = L.map('hotel-map').setView([47.5, 19.04], 7);

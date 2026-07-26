@@ -76,3 +76,7 @@ test('Hotel Core - Status transitions and idempotency', async (t) => {
     await pool.query('DELETE FROM hotels WHERE id = $1', [hotelId]);
     await pool.query('DELETE FROM tours WHERE id = $1', [tourId]);
 });
+
+test.after(async () => {
+    await pool.end();
+});

@@ -3,6 +3,7 @@ const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
 const TourCore = require('../engines/tour-core-engine');
+const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
 
 function numberOrNull(value) {
     if (value === undefined || value === null || value === '') return null;
@@ -584,10 +585,10 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
         .metric-item { background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #eee; }
         .metric-label { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; }
         .metric-value { font-size: 16px; font-weight: 700; margin-top: 4px; }
+        ${renderAdminMapStyles()}
     `;
 
     const content = `
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
         <main class="tour-main">
             <div class="tour-sidebar">
                 <div class="card" style="padding:16px;">
@@ -612,7 +613,7 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
     `;
 
     const scripts = `
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        ${renderAdminMapScript()}
         <script>
             const map = L.map('tour-map').setView([47.5, 19.04], 7);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: 'OSM' }).addTo(map);
