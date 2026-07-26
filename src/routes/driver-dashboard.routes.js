@@ -1414,8 +1414,8 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     name: r.querySelector('.stop-recipient').value || r.querySelector('.stop-street').value || 'Megálló'
                 }));
 
-                const pickupOptions = stops.map(s => `<option value="${s.uuid}" ${c && c.pickup_stop_uuid === s.uuid ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
-                const deliveryOptions = stops.map(s => `<option value="${s.uuid}" ${c && c.delivery_stop_uuid === s.uuid ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+                const pickupOptions = stops.map(s => `\<option value="\${s.uuid}" \${c && c.pickup_stop_uuid === s.uuid ? 'selected' : ''}>\${esc(s.name)}\</option\>`).join('');
+                const deliveryOptions = stops.map(s => `\<option value="\${s.uuid}" \${c && c.delivery_stop_uuid === s.uuid ? 'selected' : ''}>\${esc(s.name)}\</option\>`).join('');
 
                 d.innerHTML = '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' +
                     (c && c.id ? '<button onclick="viewCargoHistory('+c.id+')" style="position:absolute; right:40px; top:10px; background:#3498db; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">🕒</button>' : '') +
@@ -1489,14 +1489,14 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     const data = await res.json();
                     document.getElementById('historyTitle').innerText = 'Szállítmány történet: ' + data.name + ' (S/N: ' + (data.serial_number || 'N/A') + ')';
                     const list = document.getElementById('cargoHistoryList');
-                    list.innerHTML = (data.events || []).map(e => `
-                        <tr>
-                            <td>${new Date(Number(e.timestamp)).toLocaleString()}</td>
-                            <td><b>${e.event_type}</b></td>
-                            <td>${e.from_status || '---'} → ${e.to_status || '---'}</td>
-                            <td>${e.actor_type || 'SYSTEM'}${e.actor_id ? ' ('+e.actor_id+')' : ''}</td>
-                            <td>${e.reason || ''}</td>
-                        </tr>
+                    list.innerHTML = (data.events || []).map(e => `\
+                        <tr>\
+                            <td>\${new Date(Number(e.timestamp)).toLocaleString()}</td>\
+                            <td><b>\${e.event_type}</b></td>\
+                            <td>\${e.from_status || '---'} → \${e.to_status || '---'}</td>\
+                            <td>\${e.actor_type || 'SYSTEM'}\${e.actor_id ? ' ('+e.actor_id+')' : ''}</td>\
+                            <td>\${e.reason || ''}</td>\
+                        </tr>\
                     `).join('');
                     document.getElementById('cargoHistoryModal').style.display = 'block';
                 } catch(e) { alert('Hiba a történet betöltésekor'); }
