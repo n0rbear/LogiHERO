@@ -23,8 +23,9 @@ worktimeSyncRoutes.post('/api/sync-worktimes', async (req, res) => {
     try {
         await client.query('BEGIN');
         for (const wt of req.body) {
-            await client.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date)
-                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            const now = Date.now();
+            await client.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date, created_at, updated_at, sync_state, revision)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, 'SYNCED', 1)
                 ON CONFLICT (uuid) DO UPDATE SET
                     driver_name = EXCLUDED.driver_name,
                     type = EXCLUDED.type,
@@ -34,8 +35,11 @@ worktimeSyncRoutes.post('/api/sync-worktimes', async (req, res) => {
                     end_mileage = EXCLUDED.end_mileage,
                     license_plate = EXCLUDED.license_plate,
                     notes = EXCLUDED.notes,
-                    date = EXCLUDED.date`,
-                [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
+                    date = EXCLUDED.date,
+                    updated_at = EXCLUDED.updated_at,
+                    sync_state = 'SYNCED',
+                    revision = COALESCE(work_times.revision, 1) + 1`,
+                [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date, now]);
         }
         await client.query('COMMIT');
         res.sendStatus(200);

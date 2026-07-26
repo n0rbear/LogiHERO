@@ -317,6 +317,34 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
             @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         \`;
         document.head.appendChild(style);
+
+        (function startAdminLiveRefresh() {
+            let lastVersion = null;
+            const interactiveSelector = 'input, textarea, select';
+            async function checkVersion() {
+                try {
+                    const res = await fetch('/api/sync/version', { headers: { 'accept': 'application/json' } });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (lastVersion === null) {
+                        lastVersion = data.version || 0;
+                        return;
+                    }
+                    if ((data.version || 0) > lastVersion) {
+                        lastVersion = data.version || 0;
+                        if (document.activeElement && document.activeElement.matches(interactiveSelector)) {
+                            showToast('Friss adatok erkeztek. Mentes utan frissitsd az oldalt.', 'success');
+                            return;
+                        }
+                        location.reload();
+                    }
+                } catch (_err) {
+                    // Keep admin usable if polling fails.
+                }
+            }
+            setInterval(checkVersion, 15000);
+            checkVersion();
+        })();
     </script>
     ${scripts}
 </body>

@@ -266,6 +266,17 @@ const initDb = async () => {
             metadata JSONB,
             UNIQUE(uuid)
         )`,
+        `CREATE TABLE IF NOT EXISTS sync_events (
+            id SERIAL PRIMARY KEY,
+            request_id TEXT,
+            entity TEXT NOT NULL,
+            entity_uuid TEXT,
+            direction TEXT NOT NULL,
+            result TEXT NOT NULL,
+            duration_ms INT,
+            details JSONB,
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        )`,
         `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
         BEGIN
             UPDATE tours SET is_current = false, updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
@@ -413,6 +424,10 @@ const initDb = async () => {
         ['drivers', 'company_uuid', 'UUID'],
         ['drivers', 'photo_url', 'TEXT'],
         ['drivers', 'profile_updated_at', 'BIGINT DEFAULT 0'],
+        ['drivers', 'updated_at', 'BIGINT'],
+        ['drivers', 'deleted_at', 'BIGINT'],
+        ['drivers', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['drivers', 'revision', 'INT DEFAULT 1'],
         ['drivers', 'home_lat', 'DOUBLE PRECISION'],
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
         ['drivers', 'base_lat', 'DOUBLE PRECISION'],
@@ -424,7 +439,32 @@ const initDb = async () => {
         ['driver_devices', 'device_name', 'TEXT'],
         ['driver_devices', 'is_active', 'BOOLEAN DEFAULT TRUE'],
         ['driver_devices', 'linked_at', 'BIGINT'],
-        ['driver_devices', 'last_seen_at', 'BIGINT']
+        ['driver_devices', 'last_seen_at', 'BIGINT'],
+        ['driver_devices', 'created_at', 'BIGINT'],
+        ['driver_devices', 'updated_at', 'BIGINT'],
+        ['driver_devices', 'deleted_at', 'BIGINT'],
+        ['driver_devices', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['driver_devices', 'revision', 'INT DEFAULT 1'],
+        ['tours', 'created_at', 'BIGINT'],
+        ['tours', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['tours', 'revision', 'INT DEFAULT 1'],
+        ['stops', 'created_at', 'BIGINT'],
+        ['stops', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['stops', 'revision', 'INT DEFAULT 1'],
+        ['hotels', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['hotels', 'revision', 'INT DEFAULT 1'],
+        ['cargo', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['cargo', 'revision', 'INT DEFAULT 1'],
+        ['work_times', 'created_at', 'BIGINT'],
+        ['work_times', 'updated_at', 'BIGINT'],
+        ['work_times', 'deleted_at', 'BIGINT'],
+        ['work_times', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['work_times', 'revision', 'INT DEFAULT 1'],
+        ['costs', 'created_at', 'BIGINT'],
+        ['costs', 'updated_at', 'BIGINT'],
+        ['costs', 'deleted_at', 'BIGINT'],
+        ['costs', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
+        ['costs', 'revision', 'INT DEFAULT 1']
     ];
 
     for (const [t, c, type] of migrations) {
@@ -493,6 +533,24 @@ const initDb = async () => {
                 FROM cargo c
                 WHERE ce.cargo_id = c.id AND (ce.company_uuid IS NULL OR ce.driver_uuid IS NULL)
             `);
+        }
+
+        const now = Date.now();
+        const syncTables = ['drivers', 'driver_devices', 'tours', 'stops', 'hotels', 'cargo', 'work_times', 'costs'];
+        for (const table of syncTables) {
+            const fallbackColumn = await hasColumn(table, 'timestamp') ? 'timestamp' : 'NULL';
+            if (await hasColumn(table, 'created_at')) {
+                await pool.query(`UPDATE ${table} SET created_at = COALESCE(created_at, updated_at, ${fallbackColumn}, $1) WHERE created_at IS NULL`, [now]);
+            }
+            if (await hasColumn(table, 'updated_at')) {
+                await pool.query(`UPDATE ${table} SET updated_at = COALESCE(updated_at, ${fallbackColumn}, created_at, $1) WHERE updated_at IS NULL`, [now]);
+            }
+            if (await hasColumn(table, 'sync_state')) {
+                await pool.query(`UPDATE ${table} SET sync_state = COALESCE(sync_state, 'SYNCED') WHERE sync_state IS NULL`);
+            }
+            if (await hasColumn(table, 'revision')) {
+                await pool.query(`UPDATE ${table} SET revision = COALESCE(revision, 1) WHERE revision IS NULL`);
+            }
         }
 
         // Permissions

@@ -186,7 +186,7 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, async (req,
         if (source === 'stop') {
             const result = await pool.query(
                 `UPDATE stops SET recipient=$1, address_full=$2, room_number=$3, entry_code=$4, booking_number=$5,
-                    phone_number=$6, email=$7, notes=$8, latitude=$9, longitude=$10, stop_status=$11, stop_date=$12, updated_at=$13
+                    phone_number=$6, email=$7, notes=$8, latitude=$9, longitude=$10, stop_status=$11, stop_date=$12, updated_at=$13, sync_state='SYNCED', revision=COALESCE(revision,1)+1
                  WHERE ${uuid ? 'uuid::text = $14' : 'id = $14'}
                  RETURNING 'stop'::TEXT as source, id, uuid::TEXT, COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address,
                     room_number, entry_code, booking_number, phone_number, email, notes, latitude, longitude, stop_status AS status, updated_at::BIGINT as timestamp`,
@@ -200,7 +200,7 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, async (req,
             const result = await pool.query(
                 `UPDATE hotels SET name=$1, driver_name=$2, address_line_1=$3, city=$4, latitude=$5, longitude=$6,
                     room_number=$7, entry_code=$8, booking_number=$9, phone=$10, email=$11, notes=$12,
-                    check_in_date=$13, check_out_date=$14, status=$15, updated_at=$16
+                    check_in_date=$13, check_out_date=$14, status=$15, updated_at=$16, sync_state='SYNCED', revision=COALESCE(revision,1)+1
                  WHERE ${uuid ? 'uuid::text = $17' : 'id = $17'}
                  RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code,
                     booking_number, phone as phone_number, email, notes, latitude, longitude, status, updated_at as timestamp`,
@@ -212,8 +212,8 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, async (req,
 
         const result = await pool.query(
             `INSERT INTO hotels (uuid, tour_id, driver_name, name, address_line_1, city, latitude, longitude, room_number,
-                entry_code, booking_number, phone, email, notes, check_in_date, check_out_date, status, created_at, updated_at)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)
+                entry_code, booking_number, phone, email, notes, check_in_date, check_out_date, status, created_at, updated_at, sync_state, revision)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, 'SYNCED', 1)
              RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code,
                 booking_number, phone as phone_number, email, notes, latitude, longitude, status, updated_at as timestamp`,
             [h.tourId, h.driverName, h.name, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now]

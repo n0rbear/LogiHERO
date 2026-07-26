@@ -134,6 +134,15 @@ data class StopPhotoUploadResponse(
 )
 
 interface BackendApi {
+    @GET("api/sync")
+    suspend fun getDeltaSync(@Query("since") since: Long): DeltaSyncResponse
+
+    @POST("api/sync")
+    suspend fun postDeltaSync(@Body request: DeltaSyncRequest): DeltaSyncApplyResponse
+
+    @GET("api/sync/version")
+    suspend fun getSyncVersion(): SyncVersionResponse
+
     @GET("api/cost-status/{driverName}")
     suspend fun getCostStatus(@Path("driverName") driverName: String): List<CostStatusUpdate>
 

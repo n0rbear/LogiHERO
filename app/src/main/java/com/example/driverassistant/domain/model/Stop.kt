@@ -53,6 +53,9 @@ data class Stop(
     @SerializedName("room_number") val roomNumber: String = "",
     @SerializedName("entry_code") val entryCode: String = "",
     @SerializedName("booking_number") val bookingNumber: String = "",
+    @SerializedName("created_at") val createdAt: Long = System.currentTimeMillis(),
     @SerializedName("deleted_at") val deletedAt: Long? = null,
-    @SerializedName("updated_at") val updatedAt: Long? = null
+    @SerializedName("updated_at") val updatedAt: Long? = null,
+    @SerializedName("sync_state") val syncState: String = "SYNCED",
+    val revision: Int = 1
 )

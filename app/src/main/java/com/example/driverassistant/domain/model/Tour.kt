@@ -37,6 +37,9 @@ data class Tour(
     @SerializedName("remaining_duration_seconds") val remainingDurationSeconds: Long? = null,
     @SerializedName("completed_distance_km") val completedDistanceKm: Double? = null,
     @SerializedName("route_status") val routeStatus: String = "NOT_CALCULATED",
+    @SerializedName("created_at") val createdAt: Long = System.currentTimeMillis(),
     @SerializedName("deleted_at") val deletedAt: Long? = null,
-    @SerializedName("updated_at") val updatedAt: Long? = null
+    @SerializedName("updated_at") val updatedAt: Long? = null,
+    @SerializedName("sync_state") val syncState: String = "SYNCED",
+    val revision: Int = 1
 )

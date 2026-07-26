@@ -39,6 +39,7 @@ const createAdminSaveTourRoutes = require('./src/routes/admin-save-tour.routes')
 const adminTransferTourRoutes = require('./src/routes/admin-transfer-tour.routes');
 const adminRoutes = require('./src/routes/admin.routes');
 const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
+const syncRoutes = require('./src/routes/sync.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
 const {
     requestIdMiddleware,
@@ -75,6 +76,7 @@ app.use(driverProfileRoutes);
 app.use(uploadRoutes);
 app.use(driverReadRoutes);
 app.use(createSyncTourRoutes({ ImportEngine }));
+app.use(syncRoutes);
 app.use(tourRoutes);
 app.use(tourCoreRoutes);
 app.use(cargoRoutes);

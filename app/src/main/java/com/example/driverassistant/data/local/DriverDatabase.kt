@@ -23,13 +23,36 @@ import com.example.driverassistant.domain.model.*
         Cargo::class,
         CargoEvent::class
     ],
-    version = 27,
+    version = 28,
     exportSchema = false
 )
 abstract class DriverDatabase : RoomDatabase() {
     abstract val dao: DriverDao
 
     companion object {
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val withFullSyncMeta = listOf("tours", "stops", "hotels", "cargo", "work_times", "costs")
+                for (table in withFullSyncMeta) {
+                    try { db.execSQL("ALTER TABLE $table ADD COLUMN syncState TEXT NOT NULL DEFAULT 'SYNCED'") } catch (_: Exception) {}
+                    try { db.execSQL("ALTER TABLE $table ADD COLUMN revision INTEGER NOT NULL DEFAULT 1") } catch (_: Exception) {}
+                }
+                for (table in listOf("tours", "stops")) {
+                    try { db.execSQL("ALTER TABLE $table ADD COLUMN createdAt INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
+                    db.execSQL("UPDATE $table SET createdAt = COALESCE(updatedAt, 0) WHERE createdAt = 0")
+                }
+                for (table in listOf("work_times", "costs")) {
+                    try { db.execSQL("ALTER TABLE $table ADD COLUMN createdAt INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
+                    try { db.execSQL("ALTER TABLE $table ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
+                    try { db.execSQL("ALTER TABLE $table ADD COLUMN deletedAt INTEGER") } catch (_: Exception) {}
+                }
+                db.execSQL("UPDATE work_times SET createdAt = CASE WHEN createdAt = 0 THEN COALESCE(startTime, 0) ELSE createdAt END")
+                db.execSQL("UPDATE costs SET createdAt = CASE WHEN createdAt = 0 THEN COALESCE(timestamp, 0) ELSE createdAt END")
+                db.execSQL("UPDATE work_times SET updatedAt = CASE WHEN updatedAt = 0 THEN createdAt ELSE updatedAt END")
+                db.execSQL("UPDATE costs SET updatedAt = CASE WHEN updatedAt = 0 THEN createdAt ELSE updatedAt END")
+            }
+        }
+
         val MIGRATION_26_27 = object : Migration(26, 27) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // 1. Expand Hotels table

@@ -45,5 +45,7 @@ data class Cargo(
     @SerializedName("driver_name") val driverName: String? = null,
     @SerializedName("created_at") val createdAt: Long = System.currentTimeMillis(),
     @SerializedName("updated_at") val updatedAt: Long = System.currentTimeMillis(),
-    @SerializedName("deleted_at") val deletedAt: Long? = null
+    @SerializedName("deleted_at") val deletedAt: Long? = null,
+    @SerializedName("sync_state") val syncState: String = "SYNCED",
+    val revision: Int = 1
 )

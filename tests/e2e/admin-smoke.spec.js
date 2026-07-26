@@ -71,7 +71,7 @@ test('admin production flow works in real Chromium', async ({ page }) => {
 
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: /Deaktiv/i }).click();
-    await expect(page.getByText(/Sof.*r deaktiv/i)).toBeVisible();
+    await expect(page.getByText('Sofőr deaktiválva.')).toBeVisible();
     await page.waitForTimeout(800);
 
     await page.goto('/admin/hotels');

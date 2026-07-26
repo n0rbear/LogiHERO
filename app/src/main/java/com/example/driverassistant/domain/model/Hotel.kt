@@ -57,6 +57,9 @@ data class Hotel(
     val updatedAt: Long = System.currentTimeMillis(),
     @SerializedName("deleted_at")
     val deletedAt: Long? = null,
+    @SerializedName("sync_state")
+    val syncState: String = "SYNCED",
+    val revision: Int = 1,
     
     // Optional fields
     @SerializedName("contact_name")
@@ -87,4 +90,3 @@ data class Hotel(
         const val STATUS_PROBLEM = "PROBLEM"
     }
 }
-

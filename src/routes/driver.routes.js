@@ -101,7 +101,7 @@ driverProfileRoutes.post('/api/sync-profile', async (req, res) => {
             }
             const oldName = driver.name;
             await client.query(
-                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=true, profile_updated_at=$8
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=true, profile_updated_at=$8, updated_at=$8, sync_state='SYNCED', revision=COALESCE(revision,1)+1
                  WHERE uuid=$9`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, driver.uuid]
             );
@@ -180,7 +180,7 @@ driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) =>
             const oldName = oldRes.rows[0]?.name;
 
             const updated = await client.query(
-                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12, profile_updated_at=$13 WHERE uuid=$14`,
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12, profile_updated_at=$13, updated_at=$13, sync_state='SYNCED', revision=COALESCE(revision,1)+1 WHERE uuid=$14`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, Date.now(), d.uuid]
             );
 
@@ -197,8 +197,8 @@ driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) =>
         } else {
             const code = crypto.randomBytes(4).toString('hex').toUpperCase();
             const inserted = await client.query(
-                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active, home_lat, home_lng, base_lat, base_lng, profile_updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active, home_lat, home_lng, base_lat, base_lng, profile_updated_at, created_at, updated_at, sync_state, revision)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $14, 'SYNCED', 1)
                  RETURNING uuid`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, Date.now()]
             );
@@ -218,9 +218,9 @@ driverProfileRoutes.post('/admin/delete-driver', requireAdmin, async (req, res) 
     const { uuid } = req.body;
     if (!UUID_RE.test(uuid || '')) return res.status(400).json({ error: 'Hibás sofőr UUID.' });
     try {
-        const result = await pool.query('UPDATE drivers SET is_active = false, profile_updated_at = $1 WHERE uuid = $2 RETURNING uuid', [Date.now(), uuid]);
+        const result = await pool.query('UPDATE drivers SET is_active = false, profile_updated_at = $1, updated_at = $1, sync_state = $2, revision = COALESCE(revision,1)+1 WHERE uuid = $3 RETURNING uuid', [Date.now(), 'SYNCED', uuid]);
         if (!result.rows[0]) return res.status(404).json({ error: 'Sofőr nem található.' });
-        await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE driver_uuid = $2', [Date.now(), uuid]);
+        await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1, updated_at = $1, sync_state = $2, revision = COALESCE(revision,1)+1 WHERE driver_uuid = $3', [Date.now(), 'SYNCED', uuid]);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });

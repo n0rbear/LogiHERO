@@ -4,6 +4,7 @@ import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 object NdpAgent {
     private val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -14,9 +15,11 @@ object NdpAgent {
     private var configuration: NdpConfiguration? = null
     private var transport: NdpTransport = HttpNdpTransport()
     private var sessionId: String = UUID.randomUUID().toString()
+    private val generation = AtomicInteger(0)
 
     fun initialize(configuration: NdpConfiguration, transport: NdpTransport = HttpNdpTransport()) {
         runCatching {
+            generation.incrementAndGet()
             this.configuration = configuration
             this.transport = transport
             this.sessionId = UUID.randomUUID().toString()
@@ -41,6 +44,7 @@ object NdpAgent {
         runtimeVersion: Map<String, String?> = emptyMap(),
     ) {
         val activeConfiguration = configuration ?: return
+        val activeGeneration = generation.get()
         runCatching {
             synchronized(queue) {
                 if (queue.size >= activeConfiguration.maxQueueSize) {
@@ -57,6 +61,7 @@ object NdpAgent {
                             payload = payload,
                             runtimeVersion = runtimeVersion,
                         ),
+                        generation = activeGeneration,
                     ),
                 )
             }
@@ -66,11 +71,12 @@ object NdpAgent {
 
     fun flushAsync() {
         val activeConfiguration = configuration ?: return
+        val activeGeneration = generation.get()
         if (!flushing.compareAndSet(false, true)) return
 
         executor.execute {
             try {
-                flush(activeConfiguration)
+                flush(activeConfiguration, activeGeneration)
             } catch (_: Throwable) {
             } finally {
                 flushing.set(false)
@@ -80,9 +86,15 @@ object NdpAgent {
 
     internal fun queuedCount(): Int = synchronized(queue) { queue.size }
 
-    private fun flush(activeConfiguration: NdpConfiguration) {
+    private fun flush(activeConfiguration: NdpConfiguration, activeGeneration: Int) {
         while (true) {
             val queued = synchronized(queue) { queue.firstOrNull() } ?: return
+            if (queued.generation != activeGeneration) {
+                synchronized(queue) {
+                    if (queue.firstOrNull() === queued) queue.removeFirst()
+                }
+                continue
+            }
             val body = NdpJson.event(queued.event, activeConfiguration, sessionId)
             val sent = runCatching { transport.send(activeConfiguration, body) }.getOrDefault(false)
             var shouldStop = false
@@ -107,5 +119,6 @@ object NdpAgent {
     private data class QueuedEvent(
         val event: NdpEvent,
         val attempts: Int = 0,
+        val generation: Int,
     )
 }
