@@ -570,69 +570,142 @@ async function markStop(req, res, status) {
 tourCoreRoutes.post('/api/tours/:id/stops/:stopId/arrive', async (req, res) => markStop(req, res, 'ARRIVED'));
 tourCoreRoutes.post('/api/tours/:id/stops/:stopId/complete', async (req, res) => markStop(req, res, 'COMPLETED'));
 
-tourCoreRoutes.get('/admin/tours', async (_req, res) => {
-    res.send(`<!doctype html><html><head><title>LogiHERO Tours</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <style>
-    :root{--bg:#f6faf7;--surface:#fff;--ink:#16211d;--muted:#607069;--brand:#16884f;--border:#d9e4dd;--warn:#b7791f;--err:#c73535}
-    body{font-family:Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)} header{background:#26312d;color:white;padding:18px 24px}
-    main{display:grid;grid-template-columns:360px 1fr;gap:18px;padding:18px}.panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px}
-    #map{height:560px;border-radius:8px;border:1px solid var(--border)} button{background:var(--brand);color:white;border:0;border-radius:6px;padding:9px 12px;cursor:pointer}
-    .tour{border-bottom:1px solid var(--border);padding:10px 0}.tour button{margin-top:8px}.metric{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric div{background:#edf5ef;padding:10px;border-radius:6px}
-    .status{font-size:12px;color:var(--muted)} @media(max-width:900px){main{grid-template-columns:1fr}#map{height:420px}}
-    </style></head><body><header><h1>LogiHERO Túrák</h1></header><main>
-    <section class="panel"><h2>Túralista</h2>
-      <input type="text" id="tourSearch" placeholder="Túra v. szállítmány keresés..." oninput="searchTours()" style="width:100%; padding:8px; margin-bottom:10px; box-sizing:border-box;">
-      <div id="tours"></div>
-    </section>
-    <section class="panel"><h2 id="title">Térkép</h2><div class="metric" id="metrics"></div><p id="next"></p><div id="map"></div><div id="stops"></div></section>
-    </main><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
-    const map=L.map('map').setView([47.5,19.04],7); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'OSM'}).addTo(map);
-    let layer=L.layerGroup().addTo(map); const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const km=v=>Number(v||0).toFixed(1)+' km'; const min=s=>Math.round(Number(s||0)/60)+' perc';
-    let allTours = [];
-    async function load(){
-      const r=await fetch('/api/tours');
-      allTours=await r.json();
-      renderTours(allTours);
-    }
-    function renderTours(tours){
-      document.getElementById('tours').innerHTML=tours.map(t=>'<div class="tour"><b>'+esc(t.name)+'</b><div class="status">'+esc(t.driver_name||'')+' | '+esc(t.tour_status||'PLANNED')+'</div><button onclick="openTour('+t.id+')">Térkép</button></div>').join('')||'Nincs találat';
-    }
-    function searchTours(){
-      const q = document.getElementById('tourSearch').value.toLowerCase();
-      const filtered = allTours.filter(t => t.name.toLowerCase().includes(q) || (t.driver_name||'').toLowerCase().includes(q));
-      renderTours(filtered);
-    }
-    async function openTour(id){const r=await fetch('/api/tours/'+id); const d=await r.json(); const route=await (await fetch('/api/tours/'+id+'/route')).json(); layer.clearLayers(); document.getElementById('title').textContent=d.tour.name;      const p=d.progress||{};
-      const cargo = d.cargo || [];
-      const cargoSummary = '<div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; font-size:11px;">' +
-        '<div style="background:#eee; padding:5px; border-radius:3px;">📦 Összes: <b>' + cargo.length + '</b></div>' +
-        '<div style="background:#e8f5e9; padding:5px; border-radius:3px;">✅ Kézbesítve: <b>' + cargo.filter(c => c.status === 'DELIVERED').length + '</b></div>' +
-        '<div style="background:#ffebee; padding:5px; border-radius:3px;">⚠️ Problémás: <b>' + cargo.filter(c => ['DAMAGED','MISSING','REJECTED'].includes(c.status)).length + '</b></div>' +
-        '</div>';
-      let warnHtml = '';
-      if (d.stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
-        warnHtml = '<div style="color:var(--err); background:rgba(199,53,53,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>Hiányzó koordináta!</b> Az útvonal pontatlan lehet.</div>';
-      }
-      if (p.locationStale) {
-        warnHtml += '<div style="color:var(--warn); background:rgba(183,121,31,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>GPS jel elavult!</b> (' + new Date(p.latestLocation?.timestamp).toLocaleTimeString() + ')</div>';
-      }
-      if (d.tour.route_status === 'WARNING') {
-        warnHtml += '<div style="color:var(--warn); background:rgba(183,121,31,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>OSRM hiba!</b> Légvonalbeli becslés használatban.</div>';
-      }
+const renderAdminLayout = require('../utils/admin-layout');
 
-      document.getElementById('metrics').innerHTML=warnHtml + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div>Teljes<br><b>'+km(p.plannedDistance)+'</b></div><div>Hátra<br><b>'+km(p.remainingDistance)+'</b></div><div>Következőig<br><b>'+km(p.distanceToNextStop)+'</b></div><div>Idő hátra<br><b>'+min(p.remainingDuration)+'</b></div></div>' + cargoSummary;
-      const ns=p.nextStop; document.getElementById('next').innerHTML=ns?'<b>Következő cím:</b> '+esc(ns.recipient||ns.company||'Megálló')+'<br>'+esc(ns.address_full||ns.address||''):'Nincs több aktív megálló';
-      const bounds=[]; if(route.polyline&&route.polyline.coordinates){const latlngs=route.polyline.coordinates.map(c=>[c[1],c[0]]); L.polyline(latlngs,{color:'#16884f',weight:5}).addTo(layer); bounds.push(...latlngs);}
-      d.stops.forEach((s,i)=>{if(s.latitude&&s.longitude&&Math.abs(s.latitude)>0.0001){const label=(s.stop_status==='COMPLETED'?'✓':s.stop_status==='PROBLEM'?'!':String(i+1)); const icon=L.divIcon({html:'<div style="background:#fff;border:2px solid #16884f;border-radius:16px;padding:3px 7px;font-weight:bold">'+label+'</div>'}); L.marker([s.latitude,s.longitude],{icon}).addTo(layer).bindPopup('<b>'+esc(s.recipient||s.company||'Megálló')+'</b><br>'+esc(s.address_full||s.address||'')+'<br>'+esc(s.stop_status||'PENDING')+'<br><a target="_blank" href="'+esc('https://www.google.com/maps/dir/?api=1&destination='+s.latitude+','+s.longitude)+'">Navigáció</a>'); bounds.push([s.latitude,s.longitude]);}});
-      if(p.latestLocation&&p.latestLocation.latitude){L.circleMarker([p.latestLocation.latitude,p.latestLocation.longitude],{radius:8,color:'#c73535'}).addTo(layer).bindPopup(p.locationStale?'Utolsó ismert helyzet':'Aktuális pozíció'); bounds.push([p.latestLocation.latitude,p.latestLocation.longitude]);}
-      if(bounds.length) map.fitBounds(bounds,{padding:[30,30]}); document.getElementById('stops').innerHTML='<h3>Megállók</h3>'+d.stops.map((s,i)=>{
-        const warn = (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001) && s.stop_status !== 'COMPLETED' ? ' <span style="color:var(--err)">⚠️ Hiányzó koordináta</span>' : '';
-        return '<p><b>'+(i+1)+'. '+esc(s.recipient||s.company||'Megálló')+'</b>' + warn + '<br>'+esc(s.stop_status||'PENDING')+' | '+km(s.segment_distance_km)+' | '+min(s.segment_duration_seconds)+'</p>';
-      }).join('');
-    } load();</script></body></html>`);
+tourCoreRoutes.get('/admin/tours', requireAdmin, async (_req, res) => {
+    const styles = `
+        main.tour-main { display: grid; grid-template-columns: 360px 1fr; gap: 24px; height: calc(100vh - 160px); }
+        .tour-sidebar { overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+        #tour-map { height: 100%; min-height: 400px; border-radius: var(--radius-md); border: 1px solid var(--color-border); }
+        .tour-item { background: white; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 16px; cursor: pointer; transition: 0.2s; }
+        .tour-item:hover { border-color: var(--color-sidebar-active); box-shadow: var(--shadow-md); }
+        .tour-status-text { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; }
+        .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .metric-item { background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #eee; }
+        .metric-label { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; }
+        .metric-value { font-size: 16px; font-weight: 700; margin-top: 4px; }
+    `;
+
+    const content = `
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+        <main class="tour-main">
+            <div class="tour-sidebar">
+                <div class="card" style="padding:16px;">
+                    <input type="text" id="tourSearch" placeholder="Túra v. szállítmány keresés..." oninput="searchTours()" style="width:100%;">
+                </div>
+                <div id="tours-list-container" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px;">Betöltés...</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:24px;">
+                <div class="card" id="tour-details-card" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:20px;">
+                        <h3 id="tour-title" style="margin:0;">Válassz túrát</h3>
+                        <div id="tour-cargo-summary"></div>
+                    </div>
+                    <div id="tour-metrics" class="metric-grid"></div>
+                    <div id="tour-warnings"></div>
+                    <p id="tour-next-stop" style="font-weight:600;"></p>
+                </div>
+                <div id="tour-map"></div>
+                <div id="tour-stops-list"></div>
+            </div>
+        </main>
+    `;
+
+    const scripts = `
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <script>
+            const map = L.map('tour-map').setView([47.5, 19.04], 7);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: 'OSM' }).addTo(map);
+            let layer = L.layerGroup().addTo(map);
+
+            let allTours = [];
+            async function loadTours() {
+                try {
+                    const r = await fetch('/api/tours');
+                    allTours = await r.json();
+                    renderTours(allTours);
+                } catch(e) { console.error(e); }
+            }
+
+            function renderTours(tours) {
+                const container = document.getElementById('tours-list-container');
+                container.innerHTML = tours.map(t => \`
+                    <div class="tour-item" onclick="openTour(\${t.id})">
+                        <div style="font-weight:600;">\${esc(t.name)}</div>
+                        <div class="tour-status-text">\${esc(t.driver_name || 'Nincs sofőr')} | \${esc(t.tour_status || 'PLANNED')}</div>
+                    </div>
+                \`).join('') || '<p style="text-align:center; color:var(--color-text-muted);">Nincs túra.</p>';
+            }
+
+            function searchTours() {
+                const q = document.getElementById('tourSearch').value.toLowerCase();
+                const filtered = allTours.filter(t => t.name.toLowerCase().includes(q) || (t.driver_name || '').toLowerCase().includes(q));
+                renderTours(filtered);
+            }
+
+            const km = v => Number(v || 0).toFixed(1) + ' km';
+            const min = s => Math.round(Number(s || 0) / 60) + ' perc';
+
+            async function openTour(id) {
+                document.getElementById('tour-details-card').style.display = 'block';
+                const r = await fetch('/api/tours/' + id);
+                const d = await r.json();
+                const route = await (await fetch('/api/tours/' + id + '/route')).json();
+
+                layer.clearLayers();
+                document.getElementById('tour-title').textContent = d.tour.name;
+
+                const p = d.progress || {};
+                const cargo = d.cargo || [];
+
+                document.getElementById('tour-cargo-summary').innerHTML = \`
+                    <div style="display:flex; gap:8px;">
+                        <span class="badge" style="background:#eee;">📦 \${cargo.length}</span>
+                        <span class="badge" style="background:#e8f5e9; color:#2e7d32;">✅ \${cargo.filter(c => c.status === 'DELIVERED').length}</span>
+                        <span class="badge" style="background:#ffebee; color:#c62828;">⚠️ \${cargo.filter(c => ['DAMAGED','MISSING','REJECTED'].includes(c.status)).length}</span>
+                    </div>
+                \`;
+
+                let warnHtml = '';
+                if (d.stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
+                    warnHtml += '<div style="color:var(--color-error); background:rgba(231,76,60,0.1); padding:8px; border-radius:4px; margin-bottom:8px; font-size:12px;">⚠️ <b>Hiányzó koordináta!</b> Az útvonal pontatlan lehet.</div>';
+                }
+                document.getElementById('tour-warnings').innerHTML = warnHtml;
+
+                document.getElementById('tour-metrics').innerHTML = \`
+                    <div class="metric-item"><div class="metric-label">Tervezett</div><div class="metric-value">\${km(p.plannedDistance)}</div></div>
+                    <div class="metric-item"><div class="metric-label">Hátralévő</div><div class="metric-value">\${km(p.remainingDistance)}</div></div>
+                    <div class="metric-item"><div class="metric-label">Következőig</div><div class="metric-value">\${km(p.distanceToNextStop)}</div></div>
+                    <div class="metric-item"><div class="metric-label">Idő hátra</div><div class="metric-value">\${min(p.remainingDuration)}</div></div>
+                \`;
+
+                const ns = p.nextStop;
+                document.getElementById('tour-next-stop').innerHTML = ns ? '📍 Következő: ' + esc(ns.recipient || ns.company || 'Megálló') : '🏁 Nincs több aktív megálló';
+
+                const bounds = [];
+                if (route.polyline && route.polyline.coordinates) {
+                    const latlngs = route.polyline.coordinates.map(c => [c[1], c[0]]);
+                    L.polyline(latlngs, { color: 'var(--color-brand)', weight: 5 }).addTo(layer);
+                    bounds.push(...latlngs);
+                }
+
+                d.stops.forEach((s, i) => {
+                    if (s.latitude && s.longitude && Math.abs(s.latitude) > 0.0001) {
+                        const label = (s.stop_status === 'COMPLETED' ? '✓' : s.stop_status === 'PROBLEM' ? '!' : String(i + 1));
+                        const icon = L.divIcon({ html: '<div style="background:#fff;border:2px solid var(--color-brand);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;">' + label + '</div>', iconSize: [24, 24] });
+                        L.marker([s.latitude, s.longitude], { icon }).addTo(layer).bindPopup('<b>' + esc(s.recipient || s.company || 'Megálló') + '</b><br>' + esc(s.stop_status || 'PENDING'));
+                        bounds.push([s.latitude, s.longitude]);
+                    }
+                });
+
+                if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
+            }
+
+            loadTours();
+        </script>
+    `;
+
+    res.send(renderAdminLayout({ title: 'Túrák', content, activeMenu: 'tours', styles, scripts }));
 });
 
 module.exports = tourCoreRoutes;

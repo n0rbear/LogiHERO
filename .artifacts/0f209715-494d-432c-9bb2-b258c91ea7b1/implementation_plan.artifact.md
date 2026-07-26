@@ -1,31 +1,56 @@
-# Implementation Plan - Fix `company_uuid` Missing Column Error
+# Implementation Plan - Production Admin UX Sprint
 
-The production deployment is failing because the `drivers` table is missing the `company_uuid` column, causing a fatal error during database initialization (`initDb`). Although the initialization script attempts to add this column, it seems to be failing or skipping it.
+This plan overhauls the Admin UI of LogiHERO to provide a professional, unified, and data-driven experience. The goal is to move from a simple list of drivers to a full-featured management dashboard.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> I will modify the database initialization logic to be more robust. Specifically, I will:
-> 1. Make the column existence check schema-aware by specifying `table_schema = 'public'`.
-> 2. Add explicit logging for each column addition to help diagnose future issues.
-> 3. Ensure that the `company_uuid` column is added to all relevant tables if missing.
+> - I will refactor `/admin` to be a metrics-driven Dashboard instead of a simple driver list.
+> - A new unified sidebar navigation will be introduced across all `/admin/*` pages.
+> - "Test Data" (e.g., records containing 'demo', 'test', 'qa') will be hidden by default with a UI toggle.
+> - Activation codes will be masked by default for security.
 
 ## Proposed Changes
 
-### Database Initialization
+### Core UI Framework
+- **[NEW] [admin-layout.js](file:///C:/Users/Norbi/AndroidStudioProjects/LogiHERO/src/utils/admin-layout.js)**: A utility function to wrap any admin page content in a standard HTML shell with a sidebar, navigation, and common CSS/JS.
 
-#### [MODIFY] [init.js](file:///C:/Users/Norbi/AndroidStudioProjects/LogiHERO/src/database/init.js)
+### Routes Refactoring
+- **[MODIFY] [root.routes.js](file:///C:/Users/Norbi/AndroidStudioProjects/LogiHERO/src/routes/root.routes.js)**:
+    - `/admin` now renders the **Dashboard**.
+    - `/` (public landing) can remain or redirect to `/admin` if appropriate.
+- **[NEW] [admin-driver.routes.js](file:///C:/Users/Norbi/AndroidStudioProjects/LogiHERO/src/routes/admin-driver.routes.js)**:
+    - Dedicated routes for `/admin/drivers`, `/admin/drivers/:uuid`, and `/admin/drivers/new`.
+- **[MODIFY] [admin-hotel-view.routes.js](file:///C:/Users/Norbi/AndroidStudioProjects/LogiHERO/src/routes/admin-hotel-view.routes.js)**: Update to use the unified layout.
+- **[MODIFY] [tour-core.routes.js](file:///C:/Users/Norbi/AndroidStudioProjects/LogiHERO/src/routes/tour-core.routes.js)**: Update `/admin/tours` to use the unified layout.
 
-1.  **Refactor Column Check**: Update the `information_schema.columns` query to include `AND table_schema = 'public'`.
-2.  **Add Logging**: Log when a column is being added to a table.
-3.  **Ensure `company_uuid` exists**: Double-check that `company_uuid` is added to `drivers`, `live_updates`, `costs`, `chat_messages`, `work_times`, `hotels`, `tours`, and `stops`.
+### Features
+1.  **Dashboard Widgets**:
+    - Summary cards for Active Drivers, Active Tours, Today's Hotels, and Cargo Issues.
+    - "Recent Events" feed combining cargo and hotel events.
+2.  **Driver Management UX**:
+    - Table/Card view with status badges (Driving, Resting, etc.).
+    - Masked activation codes with "Copy" and "Regenerate" buttons.
+    - Test data toggle (persisted in `localStorage`).
+3.  **Responsive Design**: Modern CSS using variables and Flex/Grid.
 
 ## Verification Plan
 
 ### Automated Tests
-1.  **Syntax Check**: Run `node --check src/database/init.js`.
-2.  **Local Startup (Simulated)**: I will verify the logic by running a dry-run or checking the query strings. *Note: Local DB might not be available, so I will focus on syntax and logic correctness.*
+- `npm run typecheck` to ensure no syntax errors.
+- `node --check server.js`.
 
 ### Manual Verification
-1.  **Deploy to Production**: After pushing the changes, I will monitor the Render logs to ensure `initDb` completes successfully.
-2.  **Health Check**: Verify `https://logihero-backend.onrender.com/health` returns `status: ok` and `database: { status: ok }`.
+- **E2E in Chrome**:
+    - Verify `/admin` displays correct summary counts.
+    - Verify sidebar navigation works between Dashboard, Drivers, Tours, and Hotels.
+    - Test the "Show Test Data" toggle on the Drivers page.
+    - Test "Copy" and "Regenerate" for driver activation codes.
+    - Verify responsiveness on Desktop, Tablet, and Mobile views.
+
+## Success Criteria
+- Uniform sidebar present on all admin pages.
+- `/admin` provides immediate visibility into fleet status.
+- QA data is hidden by default.
+- Activation codes are secure yet manageable.
+- 0 regressions in existing backend functionality.
