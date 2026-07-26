@@ -607,13 +607,11 @@ tourCoreRoutes.get('/admin/tours', async (_req, res) => {
     }
     async function openTour(id){const r=await fetch('/api/tours/'+id); const d=await r.json(); const route=await (await fetch('/api/tours/'+id+'/route')).json(); layer.clearLayers(); document.getElementById('title').textContent=d.tour.name;      const p=d.progress||{};
       const cargo = d.cargo || [];
-      const cargoSummary = `
-        <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; font-size:11px;">
-            <div style="background:#eee; padding:5px; border-radius:3px;">📦 Összes: <b>${cargo.length}</b></div>
-            <div style="background:#e8f5e9; padding:5px; border-radius:3px;">✅ Kézbesítve: <b>${cargo.filter(c => c.status === 'DELIVERED').length}</b></div>
-            <div style="background:#ffebee; padding:5px; border-radius:3px;">⚠️ Problémás: <b>${cargo.filter(c => ['DAMAGED','MISSING','REJECTED'].includes(c.status)).length}</b></div>
-        </div>
-      `;
+      const cargoSummary = '<div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; font-size:11px;">' +
+        '<div style="background:#eee; padding:5px; border-radius:3px;">📦 Összes: <b>' + cargo.length + '</b></div>' +
+        '<div style="background:#e8f5e9; padding:5px; border-radius:3px;">✅ Kézbesítve: <b>' + cargo.filter(c => c.status === 'DELIVERED').length + '</b></div>' +
+        '<div style="background:#ffebee; padding:5px; border-radius:3px;">⚠️ Problémás: <b>' + cargo.filter(c => ['DAMAGED','MISSING','REJECTED'].includes(c.status)).length + '</b></div>' +
+        '</div>';
       let warnHtml = '';
       if (d.stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
         warnHtml = '<div style="color:var(--err); background:rgba(199,53,53,0.1); padding:8px; border-radius:4px; margin-bottom:8px;">⚠️ <b>Hiányzó koordináta!</b> Az útvonal pontatlan lehet.</div>';
