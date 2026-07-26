@@ -3,7 +3,9 @@ const pool = require('./pool');
 const initDb = async () => {
     console.log('[STARTUP] initDb started');
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
-    const queries = [
+
+    // 1. Core tables
+    const coreQueries = [
         `CREATE TABLE IF NOT EXISTS companies (
             uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
             name TEXT UNIQUE NOT NULL,
@@ -56,11 +58,151 @@ const initDb = async () => {
             linked_at BIGINT,
             last_seen_at BIGINT
         )`,
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, address TEXT, booking_number TEXT, timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS live_updates (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            driver_photo TEXT,
+            driver_phone TEXT,
+            driver_email TEXT,
+            license_plate TEXT,
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            speed FLOAT,
+            status TEXT,
+            current_tour TEXT,
+            next_stop TEXT,
+            next_lat DOUBLE PRECISION,
+            next_lng DOUBLE PRECISION,
+            next_stop_dist FLOAT,
+            next_stop_duration BIGINT,
+            tour_remaining_dist FLOAT,
+            tour_remaining_duration BIGINT,
+            depot_name TEXT,
+            depot_lat DOUBLE PRECISION,
+            depot_lng DOUBLE PRECISION,
+            timestamp BIGINT,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS costs (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            amount DECIMAL,
+            currency TEXT,
+            category TEXT,
+            notes TEXT,
+            mileage INT,
+            status TEXT DEFAULT 'Rögzítve',
+            photo_path TEXT,
+            timestamp BIGINT,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS chat_messages (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            sender TEXT,
+            message TEXT,
+            timestamp BIGINT,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS work_times (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            type TEXT,
+            start_time BIGINT,
+            end_time BIGINT,
+            mileage INT,
+            end_mileage INT,
+            license_plate TEXT,
+            notes TEXT,
+            date TEXT,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS tours (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            name TEXT,
+            customer TEXT,
+            date BIGINT,
+            day_of_week TEXT,
+            notes TEXT,
+            is_closed BOOLEAN,
+            is_current BOOLEAN,
+            depot_name TEXT,
+            depot_company TEXT,
+            depot_street TEXT,
+            depot_house_number TEXT,
+            depot_postal_code TEXT,
+            depot_city TEXT,
+            depot_state TEXT,
+            depot_country TEXT,
+            depot_address_full TEXT,
+            depot_lat DOUBLE PRECISION,
+            depot_lng DOUBLE PRECISION,
+            deleted_at BIGINT,
+            updated_at BIGINT,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS stops (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            tour_id INT,
+            address TEXT,
+            recipient TEXT,
+            company TEXT,
+            street TEXT,
+            house_number TEXT,
+            postal_code TEXT,
+            city TEXT,
+            state TEXT,
+            country TEXT,
+            address_full TEXT,
+            contact_name TEXT,
+            phone_number TEXT,
+            email TEXT,
+            time_window TEXT,
+            notes TEXT,
+            alternative_names TEXT,
+            order_index INT,
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            is_completed BOOLEAN,
+            arrival_time BIGINT,
+            photo_url TEXT,
+            deleted_at BIGINT,
+            updated_at BIGINT,
+            stop_type TEXT DEFAULT 'DELIVERY',
+            items JSONB,
+            UNIQUE(uuid)
+        )`,
+        `CREATE TABLE IF NOT EXISTS hotels (
+            id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
+            driver_name TEXT,
+            name TEXT,
+            address TEXT,
+            booking_number TEXT,
+            timestamp BIGINT,
+            UNIQUE(uuid)
+        )`,
         `CREATE TABLE IF NOT EXISTS hotel_events (
             id SERIAL PRIMARY KEY,
             hotel_id INT REFERENCES hotels(id),
@@ -74,11 +216,11 @@ const initDb = async () => {
             client_event_id TEXT UNIQUE,
             metadata JSONB
         )`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, photo_url TEXT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS cargo (
             id SERIAL PRIMARY KEY,
             uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
             tour_id INT REFERENCES tours(id),
             pickup_stop_id INT REFERENCES stops(id),
             delivery_stop_id INT REFERENCES stops(id),
@@ -101,14 +243,16 @@ const initDb = async () => {
             condition_at_delivery TEXT,
             notes TEXT,
             driver_name TEXT,
-            company_uuid UUID,
-            driver_uuid UUID,
             created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
             updated_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
-            deleted_at BIGINT
+            deleted_at BIGINT,
+            UNIQUE(uuid)
         )`,
         `CREATE TABLE IF NOT EXISTS cargo_events (
             id SERIAL PRIMARY KEY,
+            uuid UUID DEFAULT gen_random_uuid() UNIQUE,
+            company_uuid UUID,
+            driver_uuid UUID,
             cargo_id INT REFERENCES cargo(id),
             event_type TEXT NOT NULL,
             from_status TEXT,
@@ -119,7 +263,8 @@ const initDb = async () => {
             timestamp BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
             reason TEXT,
             client_event_id TEXT UNIQUE,
-            metadata JSONB
+            metadata JSONB,
+            UNIQUE(uuid)
         )`,
         `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
         BEGIN
@@ -130,8 +275,26 @@ const initDb = async () => {
         END;
         $$ LANGUAGE plpgsql;`
     ];
-    for (let q of queries) await pool.query(q);
-    const cols = [
+
+    for (let q of coreQueries) {
+        await pool.query(q);
+    }
+
+    // 2. Non-destructive migrations (Column check helper)
+    const ensureColumn = async (table, column, type) => {
+        const check = await pool.query(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
+            [table, column]
+        );
+        if (check.rows.length === 0) {
+            console.log(`[MIGRATION] column added: ${table}.${column} (${type})`);
+            await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+            return true;
+        }
+        return false;
+    };
+
+    const migrations = [
         ['stops', 'items', 'JSONB'],
         ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
         ['stops', 'photo_url', 'TEXT'],
@@ -243,6 +406,10 @@ const initDb = async () => {
         ['tours', 'driver_uuid', 'UUID'],
         ['stops', 'company_uuid', 'UUID'],
         ['stops', 'driver_uuid', 'UUID'],
+        ['cargo', 'company_uuid', 'UUID'],
+        ['cargo', 'driver_uuid', 'UUID'],
+        ['cargo_events', 'company_uuid', 'UUID'],
+        ['cargo_events', 'driver_uuid', 'UUID'],
         ['drivers', 'company_uuid', 'UUID'],
         ['drivers', 'photo_url', 'TEXT'],
         ['drivers', 'profile_updated_at', 'BIGINT DEFAULT 0'],
@@ -250,36 +417,85 @@ const initDb = async () => {
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
         ['drivers', 'base_lat', 'DOUBLE PRECISION'],
         ['drivers', 'base_lng', 'DOUBLE PRECISION'],
+        ['drivers', 'whatsapp', 'TEXT'],
+        ['drivers', 'telegram', 'TEXT'],
+        ['drivers', 'activation_code', 'TEXT UNIQUE'],
+        ['drivers', 'created_at', 'BIGINT'],
         ['driver_devices', 'device_name', 'TEXT'],
         ['driver_devices', 'is_active', 'BOOLEAN DEFAULT TRUE'],
         ['driver_devices', 'linked_at', 'BIGINT'],
         ['driver_devices', 'last_seen_at', 'BIGINT']
     ];
-    for (const [t, c, type] of cols) {
-        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2", [t, c]);
-        if (check.rows.length === 0) {
-            console.log(`[SCHEMA] adding column ${c} to table ${t}`);
-            await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
-        }
+
+    for (const [t, c, type] of migrations) {
+        await ensureColumn(t, c, type);
     }
 
+    // 3. Default company setup
     await pool.query(`
         INSERT INTO companies (name, slug, is_demo)
         VALUES ('Demo Company', 'demo-company', true)
         ON CONFLICT (slug) DO NOTHING
     `);
     const defaultCompany = (await pool.query("SELECT uuid FROM companies WHERE slug = 'demo-company' LIMIT 1")).rows[0];
+
     if (defaultCompany) {
         const companyUuid = defaultCompany.uuid;
-        await pool.query('UPDATE drivers SET company_uuid = $1 WHERE company_uuid IS NULL', [companyUuid]);
-        const driverLinkedTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours', 'cargo', 'cargo_events'];
-        for (const table of driverLinkedTables) {
-            await pool.query(`UPDATE ${table} SET company_uuid = $1 WHERE company_uuid IS NULL`, [companyUuid]);
-            if (table !== 'cargo_events') {
-                await pool.query(`UPDATE ${table} t SET driver_uuid = d.uuid FROM drivers d WHERE t.driver_uuid IS NULL AND t.driver_name = d.name`);
+
+        const companyLinkedTables = ['drivers', 'live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours', 'cargo', 'cargo_events', 'stops'];
+        const driverNamedTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours', 'cargo'];
+
+        // Helper to check column before update
+        const hasColumn = async (table, column) => {
+            const res = await pool.query(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
+                [table, column]
+            );
+            return res.rows.length > 0;
+        };
+
+        // Fill company_uuid
+        for (const table of companyLinkedTables) {
+            if (await hasColumn(table, 'company_uuid')) {
+                await pool.query(`UPDATE ${table} SET company_uuid = $1 WHERE company_uuid IS NULL`, [companyUuid]);
             }
         }
-        await pool.query(`UPDATE stops s SET company_uuid = t.company_uuid, driver_uuid = t.driver_uuid FROM tours t WHERE s.tour_id = t.id AND (s.company_uuid IS NULL OR s.driver_uuid IS NULL)`);
+
+        // Fill driver_uuid based on driver_name
+        for (const table of driverNamedTables) {
+            if (await hasColumn(table, 'driver_uuid') && await hasColumn(table, 'driver_name')) {
+                await pool.query(`
+                    UPDATE ${table} t
+                    SET driver_uuid = d.uuid
+                    FROM drivers d
+                    WHERE t.driver_uuid IS NULL AND t.driver_name = d.name
+                `);
+            }
+        }
+
+        // Specific backfills
+        // Stops backfill from tours
+        if (await hasColumn('stops', 'company_uuid') && await hasColumn('stops', 'driver_uuid')) {
+            await pool.query(`
+                UPDATE stops s
+                SET company_uuid = t.company_uuid, driver_uuid = t.driver_uuid
+                FROM tours t
+                WHERE s.tour_id = t.id AND (s.company_uuid IS NULL OR s.driver_uuid IS NULL)
+            `);
+        }
+
+        // Cargo_events backfill from cargo
+        if (await hasColumn('cargo_events', 'company_uuid')) {
+            console.log('[MIGRATION] backfill completed: cargo_events.company_uuid');
+            await pool.query(`
+                UPDATE cargo_events ce
+                SET company_uuid = c.company_uuid, driver_uuid = c.driver_uuid
+                FROM cargo c
+                WHERE ce.cargo_id = c.id AND (ce.company_uuid IS NULL OR ce.driver_uuid IS NULL)
+            `);
+        }
+
+        // Permissions
         const permissionRows = [
             ['CEO', 'tours', true, true],
             ['CEO', 'live_status', true, false],
@@ -295,32 +511,20 @@ const initDb = async () => {
             ['DISPATCHER', 'reports', true, false]
         ];
         for (const [role, module, canView, canEdit] of permissionRows) {
-            await pool.query(`INSERT INTO role_permissions (company_uuid, role, module, can_view, can_edit)
+            await pool.query(`
+                INSERT INTO role_permissions (company_uuid, role, module, can_view, can_edit)
                 VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (company_uuid, role, module) DO UPDATE SET can_view = EXCLUDED.can_view, can_edit = EXCLUDED.can_edit`,
                 [companyUuid, role, module, canView, canEdit]);
         }
     }
 
-    // Additional driver columns
-    const driverCols = [
-        ['drivers', 'whatsapp', 'TEXT'],
-        ['drivers', 'telegram', 'TEXT'],
-        ['drivers', 'activation_code', 'TEXT UNIQUE'],
-        ['drivers', 'created_at', 'BIGINT']
+    // 4. Constraints (Idempotent)
+    const constraints = [
+        ['work_times', 'unique_worktime', 'UNIQUE (driver_name, start_time)'],
+        ['costs', 'unique_cost', 'UNIQUE (driver_name, timestamp, amount)'],
+        ['hotels', 'unique_hotel', 'UNIQUE (driver_name, timestamp, name)']
     ];
-    for (const [t, c, type] of driverCols) {
-        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2", [t, c]);
-        if (check.rows.length === 0) {
-            console.log(`[SCHEMA] adding column ${c} to table ${t}`);
-            await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
-        }
-    }
-
-    const verifyItems = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name='stops' AND column_name='items'");
-    if (verifyItems.rows.length === 0) throw new Error("FATAL: Schema migration failed - column 'items' still does not exist in table 'stops'.");
-    console.log('[SCHEMA] items column exists');
-    const constraints = [['work_times', 'unique_worktime', 'UNIQUE (driver_name, start_time)'], ['costs', 'unique_cost', 'UNIQUE (driver_name, timestamp, amount)'], ['hotels', 'unique_hotel', 'UNIQUE (driver_name, timestamp, name)']];
     for (const [t, name, def] of constraints) {
         try {
             const check = await pool.query("SELECT conname FROM pg_constraint WHERE conname = $1", [name]);
@@ -328,7 +532,21 @@ const initDb = async () => {
                 console.log(`[SCHEMA] adding constraint ${name} to ${t}`);
                 await pool.query(`ALTER TABLE ${t} ADD CONSTRAINT ${name} ${def}`);
             }
-        } catch (e) { console.error(`[SCHEMA] Skip constraint ${name}:`, e.message); }
+        } catch (e) {
+            console.error(`[SCHEMA] Skip constraint ${name}:`, e.message);
+        }
+    }
+
+    // 5. Schema Audit
+    const auditTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours', 'cargo', 'cargo_events', 'stops', 'drivers'];
+    for (const table of auditTables) {
+        const res = await pool.query(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'company_uuid'",
+            [table]
+        );
+        if (res.rows.length === 0) {
+            throw new Error(`FATAL: Schema audit failed - table ${table} is missing company_uuid`);
+        }
     }
     console.log('[STARTUP] initDb finished');
 };
