@@ -31,6 +31,12 @@ Initialize the schema:
 npm run db:init
 ```
 
+Record versioned migrations:
+
+```bash
+npm run db:migrate
+```
+
 Load idempotent development data:
 
 ```bash
@@ -93,6 +99,12 @@ Run headed E2E when a visible browser session is available:
 
 ```bash
 npm run test:e2e:headed
+```
+
+Run read-only production smoke:
+
+```bash
+npm run smoke:production
 ```
 
 ## Production Build Metadata

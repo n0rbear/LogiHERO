@@ -96,6 +96,9 @@ class ProfileViewModel @Inject constructor(
                 _events.emit("Érvénytelen aktiváló kód vagy nem elérhető a szerver.")
                 return@launch
             }
+            if (!remote.deviceToken.isNullOrBlank()) {
+                prefs.edit().putString("device_token", remote.deviceToken).apply()
+            }
             applyRemoteProfile(
                 uuid = remote.uuid,
                 name = remote.name,

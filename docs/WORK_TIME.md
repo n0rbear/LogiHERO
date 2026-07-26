@@ -56,6 +56,8 @@ The backend uses optimistic locking. Stale `revision` or `baseRevision` values r
 Admins review Work Time at:
 
 - `/admin/work-time`
+- `/admin/work-time/weekly`
+- `/admin/work-time/weekly/:driverUuid`
 - `/admin/work-time/:uuid`
 
 Corrections require a reason, validate overlap and preserve the previous value in `work_time_audit`.
@@ -78,3 +80,7 @@ Stored timestamps are UTC epoch milliseconds. API clients may send ISO 8601 time
 ## Known Limits
 
 This is an operational work time module. It does not claim full EU tachograph, payroll, HR or legal compliance.
+
+## Sprint F Additions
+
+Weekly review and export are available to authenticated admins. CSV export protects values that begin with `=`, `+`, `-`, or `@` by prefixing them with an apostrophe. JSON export is structured for machine processing. Read-only admins can view Work Time pages but cannot correct, approve, bulk update, or write.

@@ -354,6 +354,7 @@ fun MainApp() {
                         }
                     ) 
                 }
+                composable(Screen.WorkTime.route) { WorkTimeScreen() }
                 composable(
                     route = Screen.HotelDetail.route,
                     arguments = listOf(navArgument("hotelId") { type = NavType.LongType })

@@ -16,7 +16,7 @@ async function close(server) {
 (async () => {
     const { start } = require('../server');
     const server = await start();
-    const args = [require.resolve('@playwright/test/cli'), 'test'];
+    const args = [require.resolve('@playwright/test/cli'), 'test', '--project=local-e2e'];
     if (process.argv.includes('--headed')) args.push('--headed');
 
     const child = spawn(process.execPath, args, {

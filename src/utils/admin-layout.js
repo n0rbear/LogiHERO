@@ -1,6 +1,6 @@
 const { escapeHtml } = require('./escape');
 
-const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = '', csrfToken = '' }) => {
+const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = '', csrfToken = '', adminRole = 'FULL_ADMIN' }) => {
     const menuItems = [
         { id: 'dashboard', label: 'Dashboard', icon: '📊', path: '/admin' },
         { id: 'tours', label: 'Túrák', icon: '🚛', path: '/admin/tours' },
@@ -268,6 +268,8 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
 
     <script>
         window.adminCsrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        window.adminRole = ${JSON.stringify(adminRole)};
+        window.isReadOnlyAdmin = window.adminRole === 'READ_ONLY';
 
         function showToast(msg, type = 'success') {
             const container = document.getElementById('toast-container');

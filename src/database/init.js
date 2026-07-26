@@ -512,6 +512,8 @@ const initDb = async () => {
         ['driver_devices', 'deleted_at', 'BIGINT'],
         ['driver_devices', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
         ['driver_devices', 'revision', 'INT DEFAULT 1'],
+        ['driver_devices', 'device_token_hash', 'TEXT'],
+        ['driver_devices', 'token_rotated_at', 'BIGINT'],
         ['tours', 'created_at', 'BIGINT'],
         ['tours', 'sync_state', 'TEXT DEFAULT \'SYNCED\''],
         ['tours', 'revision', 'INT DEFAULT 1'],

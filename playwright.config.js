@@ -18,9 +18,21 @@ module.exports = defineConfig({
     },
     projects: [
         {
-            name: 'chromium',
+            name: process.env.LOGIHERO_E2E_EXTERNAL_SERVER ? 'local-e2e' : 'local-e2e',
+            testIgnore: /production-smoke\.spec\.js/,
             use: {
                 ...devices['Desktop Chrome'],
+                launchOptions: {
+                    executablePath: process.env.PLAYWRIGHT_CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+                }
+            }
+        },
+        {
+            name: 'production-smoke',
+            testMatch: /production-smoke\.spec\.js/,
+            use: {
+                ...devices['Desktop Chrome'],
+                baseURL: process.env.SMOKE_BASE_URL || 'https://logihero-backend.onrender.com',
                 launchOptions: {
                     executablePath: process.env.PLAYWRIGHT_CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
                 }

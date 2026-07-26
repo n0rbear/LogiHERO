@@ -10,12 +10,14 @@
     "db:up": "docker compose -f docker-compose.dev.yml up -d",
     "db:down": "docker compose -f docker-compose.dev.yml down",
     "db:init": "node scripts/db-init.js",
+    "db:migrate": "node scripts/db-migrate.js",
     "db:seed": "node scripts/db-seed.js",
     "start": "node server.js",
     "test": "node --test tests/*.test.js",
     "test:integration": "node --test tests/hotel.test.js",
     "test:e2e": "npm run db:init && npm run db:seed && node scripts/run-e2e.js",
     "test:e2e:headed": "npm run db:init && npm run db:seed && node scripts/run-e2e.js --headed",
+    "smoke:production": "node scripts/production-smoke.js",
     "typecheck": "node scripts/check-syntax.js"
   },
   "dependencies": {

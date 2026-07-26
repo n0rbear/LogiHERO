@@ -3,6 +3,7 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://logihero_de
 
 const initDb = require('../src/database/init');
 const pool = require('../src/database/pool');
+const crypto = require('node:crypto');
 
 const LOCAL_DATABASE_RE = /@(localhost|127\.0\.0\.1|host\.docker\.internal):|\/\/[^@/]+@postgres:/i;
 
@@ -31,7 +32,8 @@ async function upsertDrivers(client, companyUuid) {
     const now = Date.now();
     const drivers = [
         ['LogiHERO Dev Driver Active', 'active.driver@example.test', '+36 30 111 1111', '@logihero_active', 'DEV-101', true, 'DEV-ACT1'],
-        ['LogiHERO Dev Driver Inactive', 'inactive.driver@example.test', '+36 30 222 2222', '@logihero_inactive', 'DEV-202', false, 'DEV-INAC']
+        ['LogiHERO Dev Driver Inactive', 'inactive.driver@example.test', '+36 30 222 2222', '@logihero_inactive', 'DEV-202', false, 'DEV-INAC'],
+        ['=LogiHERO CSV Injection Driver', 'csv.driver@example.test', '+36 30 333 3333', '@logihero_csv', 'DEV-303', true, 'DEV-CSV1']
     ];
     const rows = [];
     for (const [name, email, phone, telegram, plate, active, code] of drivers) {
@@ -167,15 +169,18 @@ async function upsertStopsCargoHotels(client, companyUuid, driver, tour) {
 
 async function upsertDeviceState(client, companyUuid, driver) {
     const now = Date.now();
+    const tokenHash = crypto.createHash('sha256').update('dev-device-token-active-1').digest('hex');
     await client.query(`
-        INSERT INTO driver_devices (driver_uuid, device_id, device_name, is_active, linked_at, last_seen_at)
-        VALUES ($1, 'dev-device-active-1', 'Local Android Device', true, $2, $2)
+        INSERT INTO driver_devices (driver_uuid, device_id, device_name, is_active, linked_at, last_seen_at, device_token_hash, token_rotated_at)
+        VALUES ($1, 'dev-device-active-1', 'Local Android Device', true, $2, $2, $3, $2)
         ON CONFLICT (device_id) DO UPDATE SET
             driver_uuid = EXCLUDED.driver_uuid,
             device_name = EXCLUDED.device_name,
             is_active = true,
-            last_seen_at = EXCLUDED.last_seen_at
-    `, [driver.uuid, now]);
+            last_seen_at = EXCLUDED.last_seen_at,
+            device_token_hash = EXCLUDED.device_token_hash,
+            token_rotated_at = EXCLUDED.token_rotated_at
+    `, [driver.uuid, now, tokenHash]);
 
     await client.query(`
         INSERT INTO live_updates (uuid, company_uuid, driver_uuid, driver_name, driver_phone, driver_email, license_plate, latitude, longitude,
@@ -239,6 +244,25 @@ async function upsertWorkTimeSeeds(client, companyUuid, drivers, tours) {
             adminNote: 'Manual correction seed',
             anomalyFlags: ['MANUAL_CORRECTION'],
             entries: [['DRIVING', 0, 1], ['WORK', 1, 2]]
+        },
+        {
+            uuid: '60000000-0000-4000-8000-000000000005',
+            driver: drivers[2],
+            tour: null,
+            offset: -7 * 86400000,
+            status: 'CLOSED',
+            approval: 'PENDING',
+            anomalyFlags: ['SYNC_CONFLICT'],
+            entries: [['WORK', 0, 1], ['BREAK', 1, 1.5], ['DRIVING', 1.5, 3]]
+        },
+        {
+            uuid: '60000000-0000-4000-8000-000000000006',
+            driver: drivers[0],
+            tour: null,
+            offset: -14 * 86400000,
+            status: 'CLOSED',
+            approval: 'APPROVED',
+            entries: [['DRIVING', 0, 2], ['REST', 2, 3], ['WORK', 3, 4]]
         }
     ];
     for (const day of rows) {

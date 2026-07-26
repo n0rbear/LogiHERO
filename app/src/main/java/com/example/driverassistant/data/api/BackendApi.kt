@@ -93,7 +93,8 @@ data class ApiProfileResponse(
     val telegram: String? = null,
     @com.google.gson.annotations.SerializedName("license_plate") val licensePlate: String? = null,
     @com.google.gson.annotations.SerializedName("photo_url") val photoUrl: String? = null,
-    @com.google.gson.annotations.SerializedName("profile_updated_at") val profileUpdatedAt: Long? = null
+    @com.google.gson.annotations.SerializedName("profile_updated_at") val profileUpdatedAt: Long? = null,
+    val deviceToken: String? = null
 )
 
 data class ActivateDriverRequest(

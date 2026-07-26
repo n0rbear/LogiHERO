@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const crypto = require('node:crypto');
+const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
 
 const driverProfileRoutes = express.Router();
 const driverReadRoutes = express.Router();
@@ -45,19 +46,24 @@ driverProfileRoutes.post('/api/activate-driver', async (req, res) => {
         if (result.rows.length === 0) return res.status(404).send('Érvénytelen vagy inaktív aktiváló kód.');
         const driver = result.rows[0];
         const now = Date.now();
+        const deviceToken = generateDeviceToken();
         if (deviceId) {
             await pool.query(
-                `INSERT INTO driver_devices (driver_uuid, device_id, device_name, is_active, linked_at, last_seen_at)
-                 VALUES ($1, $2, $3, true, $4, $4)
+                `INSERT INTO driver_devices (driver_uuid, device_id, device_name, is_active, linked_at, last_seen_at, device_token_hash, token_rotated_at, updated_at, sync_state, revision)
+                 VALUES ($1, $2, $3, true, $4, $4, $5, $4, $4, 'SYNCED', 1)
                  ON CONFLICT (device_id) DO UPDATE SET
                     driver_uuid = EXCLUDED.driver_uuid,
                     device_name = EXCLUDED.device_name,
                     is_active = true,
-                    last_seen_at = EXCLUDED.last_seen_at`,
-                [driver.uuid, deviceId, deviceName || 'Android telefon', now]
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    device_token_hash = EXCLUDED.device_token_hash,
+                    token_rotated_at = EXCLUDED.token_rotated_at,
+                    updated_at = EXCLUDED.updated_at,
+                    revision = COALESCE(driver_devices.revision, 1) + 1`,
+                [driver.uuid, deviceId, deviceName || 'Android telefon', now, hashToken(deviceToken)]
             );
         }
-        res.json(driver);
+        res.json({ ...driver, deviceToken });
     } catch (e) { res.status(500).send(e.message); }
 });
 

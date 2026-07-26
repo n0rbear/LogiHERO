@@ -2,7 +2,7 @@ const express = require('express');
 const pool = require('../database/pool');
 const renderAdminLayout = require('../utils/admin-layout');
 const requireAdmin = require('../middleware/requireAdmin');
-const { ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
+const { ADMIN_TOKEN, READ_ONLY_ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
 const { escapeHtml } = require('../utils/escape');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
 const {
@@ -152,8 +152,11 @@ adminRoutes.get('/login', (req, res) => {
 
 adminRoutes.post('/login', (req, res) => {
     const { token } = req.body;
-    if (verifyAdminToken(token, ADMIN_TOKEN)) {
-        const session = createAdminSession();
+    const role = verifyAdminToken(token, ADMIN_TOKEN) ? 'FULL_ADMIN' :
+        (READ_ONLY_ADMIN_TOKEN && verifyAdminToken(token, READ_ONLY_ADMIN_TOKEN) ? 'READ_ONLY' : null);
+    if (role) {
+        const session = createAdminSession(Date.now(), role);
+        console.log(`[ADMIN_AUTH] requestId=${req.requestId || 'unknown'} actor=admin role=${role} action=login result=ok`);
         res.cookie('admin_session', session.id, {
             httpOnly: true,
             secure: IS_DEPLOYED,

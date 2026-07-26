@@ -13,13 +13,14 @@ function pruneExpired(now = Date.now()) {
     }
 }
 
-function createAdminSession(now = Date.now()) {
+function createAdminSession(now = Date.now(), role = 'FULL_ADMIN') {
     pruneExpired(now);
     const id = randomToken();
     const csrfToken = randomToken();
     const session = {
         id,
         csrfToken,
+        role,
         createdAt: now,
         expiresAt: now + SESSION_TTL_MS
     };

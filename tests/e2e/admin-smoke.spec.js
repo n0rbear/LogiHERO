@@ -103,6 +103,20 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.getByRole('button', { name: /Jovahagyas|Jóváhagyás/i }).click();
     await expect(page.getByText(/Allapot mentve|Állapot mentve/i)).toBeVisible();
 
+    await page.goto('/admin/work-time/weekly');
+    await expect(page.locator('table')).toContainText('LogiHERO Dev Driver Active');
+    await page.getByRole('link', { name: /Kovetkezo|Következő/i }).click();
+    await expect(page.getByRole('heading', { name: /Heti|heti/i })).toBeVisible();
+    await page.goto('/admin/work-time/weekly');
+    await page.locator('table tbody tr').first().click();
+    await expect(page.getByText(/Heti teljes/i)).toBeVisible();
+    const csv = await page.request.get('/admin/work-time/export.csv');
+    expect(csv.ok()).toBeTruthy();
+    expect(await csv.text()).toContain('driver,date,start,end,total_ms');
+    const json = await page.request.get('/admin/work-time/export.json');
+    expect(json.ok()).toBeTruthy();
+    expect((await json.json()).records.length).toBeGreaterThan(0);
+
     await page.goto('/admin/tours');
     await expect(page.locator('#tour-map')).toBeVisible();
     await expect(page.locator('#tours-list-container')).toContainText('LogiHERO Dev');

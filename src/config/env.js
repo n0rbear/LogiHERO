@@ -1,4 +1,5 @@
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const READ_ONLY_ADMIN_TOKEN = process.env.READ_ONLY_ADMIN_TOKEN || '';
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 5 * 1024 * 1024);
 const NODE_ENV = process.env.NODE_ENV;
 const IS_DEPLOYED = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.NODE_ENV === 'production');
@@ -13,6 +14,7 @@ const APP_BUILD_TIME = process.env.APP_BUILD_TIME || 'unknown';
 
 module.exports = {
     ADMIN_TOKEN,
+    READ_ONLY_ADMIN_TOKEN,
     MAX_UPLOAD_BYTES,
     NODE_ENV,
     DATABASE_URL,

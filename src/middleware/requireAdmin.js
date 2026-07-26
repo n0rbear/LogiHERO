@@ -1,4 +1,4 @@
-const { ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
+const { ADMIN_TOKEN, READ_ONLY_ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
 const {
     getAdminSession,
     verifyAdminToken,
@@ -68,8 +68,15 @@ const requireAdmin = (req, res, next) => {
     }
 
     // 3. Verify token
-    if (verifyAdminToken(bearerToken || headerToken, ADMIN_TOKEN)) {
+    const suppliedToken = bearerToken || headerToken;
+    if (verifyAdminToken(suppliedToken, ADMIN_TOKEN)) {
         req.adminAuthType = bearerToken ? 'bearer' : 'header';
+        req.adminRole = 'FULL_ADMIN';
+        return next();
+    }
+    if (READ_ONLY_ADMIN_TOKEN && verifyAdminToken(suppliedToken, READ_ONLY_ADMIN_TOKEN)) {
+        req.adminAuthType = bearerToken ? 'bearer' : 'header';
+        req.adminRole = 'READ_ONLY';
         return next();
     }
 
@@ -77,6 +84,11 @@ const requireAdmin = (req, res, next) => {
         req.adminAuthType = 'cookie';
         req.adminSession = session;
         req.adminCsrfToken = session.csrfToken;
+        req.adminRole = session.role || 'FULL_ADMIN';
+        if (req.adminRole === 'READ_ONLY' && isUnsafeMethod(req.method)) {
+            console.log(`[ADMIN_AUTH] requestId=${req.requestId || 'unknown'} actor=admin role=READ_ONLY action=write_denied result=403`);
+            return res.status(403).json({ error: 'Read-only admin cannot perform write actions.' });
+        }
         if (isUnsafeMethod(req.method) && !verifyCsrfToken(session, req.headers['x-csrf-token'] || req.body?._csrf)) {
             return res.status(403).json({ error: 'CSRF token invalid or missing.' });
         }
@@ -98,4 +110,13 @@ const requireAdmin = (req, res, next) => {
     return res.sendStatus(401);
 };
 
+function requireAdminWrite(req, res, next) {
+    if (req.adminRole === 'READ_ONLY') {
+        console.log(`[ADMIN_AUTH] requestId=${req.requestId || 'unknown'} actor=admin role=READ_ONLY action=write_denied result=403`);
+        return res.status(403).json({ error: 'Read-only admin cannot perform write actions.' });
+    }
+    return next();
+}
+
 module.exports = requireAdmin;
+module.exports.requireAdminWrite = requireAdminWrite;

@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
 const renderAdminLayout = require('../utils/admin-layout');
 const { escapeHtml } = require('../utils/escape');
 const {
@@ -22,10 +23,94 @@ const hm = (ms) => {
     return `${Math.floor(totalMinutes / 60)}:${String(totalMinutes % 60).padStart(2, '0')}`;
 };
 const scriptJson = (value) => JSON.stringify(value ?? '').replace(/</g, '\\u003c');
+const MS_DAY = 24 * 60 * 60 * 1000;
+
+function weekStart(value = new Date()) {
+    const date = new Date(value);
+    date.setUTCHours(0, 0, 0, 0);
+    const day = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() - day + 1);
+    return date;
+}
+
+function csvSafe(value) {
+    const raw = String(value ?? '');
+    const escaped = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+    return `"${escaped.replace(/"/g, '""')}"`;
+}
+
+function exportRowsToCsv(rows) {
+    const headers = ['driver', 'date', 'start', 'end', 'total_ms', 'driving_ms', 'work_ms', 'break_ms', 'rest_ms', 'availability_ms', 'approval_status', 'corrected', 'anomalies', 'tour', 'revision', 'updated_at'];
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+        lines.push([
+            row.driver_name,
+            row.work_date,
+            row.start_time,
+            row.end_time || '',
+            row.total_work_ms || 0,
+            row.driving_ms || 0,
+            Math.max(0, Number(row.total_work_ms || 0) - Number(row.driving_ms || 0) - Number(row.break_ms || 0) - Number(row.rest_ms || 0) - Number(row.availability_ms || 0)),
+            row.break_ms || 0,
+            row.rest_ms || 0,
+            row.availability_ms || 0,
+            row.approval_status,
+            row.manual_count > 0 ? 'yes' : 'no',
+            (row.anomaly_flags || []).join('|'),
+            row.tour_name || row.tour_uuid || '',
+            row.revision,
+            row.updated_at
+        ].map(csvSafe).join(','));
+    }
+    return lines.join('\r\n');
+}
+
+function workDayWhereFromQuery(query, params) {
+    const where = ['d.deleted_at IS NULL'];
+    if (query.driverUuid || query.driver_uuid) {
+        params.push(query.driverUuid || query.driver_uuid);
+        where.push(`d.driver_uuid = $${params.length}`);
+    }
+    if (query.from) {
+        params.push(query.from);
+        where.push(`d.work_date >= $${params.length}`);
+    }
+    if (query.to) {
+        params.push(query.to);
+        where.push(`d.work_date <= $${params.length}`);
+    }
+    if (query.approval) {
+        params.push(query.approval);
+        where.push(`d.approval_status = $${params.length}`);
+    }
+    if (query.tourUuid || query.tour_uuid) {
+        params.push(query.tourUuid || query.tour_uuid);
+        where.push(`d.tour_uuid = $${params.length}`);
+    }
+    if (query.anomaly === 'true') where.push(`COALESCE(array_length(d.anomaly_flags, 1), 0) > 0`);
+    return where;
+}
+
+async function getExportRows(query) {
+    const params = [];
+    const where = workDayWhereFromQuery(query, params);
+    return (await pool.query(
+        `SELECT d.*, t.name AS tour_name, COALESCE(e.manual_count, 0) AS manual_count
+         FROM work_days d
+         LEFT JOIN tours t ON t.uuid = d.tour_uuid
+         LEFT JOIN (
+            SELECT work_day_uuid, COUNT(*) FILTER (WHERE manual_edit = true) AS manual_count
+            FROM work_time_entries WHERE deleted_at IS NULL GROUP BY work_day_uuid
+         ) e ON e.work_day_uuid = d.uuid
+         WHERE ${where.join(' AND ')}
+         ORDER BY d.work_date ASC, d.driver_name ASC`,
+        params
+    )).rows;
+}
 
 function driverIdentity(req) {
     return {
-        driverUuid: req.body?.driverUuid || req.body?.driver_uuid || req.query.driverUuid || req.query.driver_uuid || null,
+        driverUuid: req.deviceAuth?.driverUuid || req.body?.driverUuid || req.body?.driver_uuid || req.query.driverUuid || req.query.driver_uuid || null,
         driverName: req.body?.driverName || req.body?.driver_name || req.query.driverName || req.query.driver_name || null
     };
 }
@@ -101,6 +186,8 @@ function validateTimestamp(value, fallback = nowMs()) {
     if (timestamp > nowMs() + 5 * 60 * 1000) return { error: 'Future timestamp is not allowed without correction flow.' };
     return { timestamp };
 }
+
+router.use('/api/work-time', requireDeviceAuth);
 
 router.get('/api/work-time/current', async (req, res, next) => {
     const client = await pool.connect();
@@ -393,6 +480,187 @@ async function setApproval(req, res, next, status) {
 router.post('/admin/work-time/:uuid/approve', requireAdmin, (req, res, next) => setApproval(req, res, next, 'APPROVED'));
 router.post('/admin/work-time/:uuid/reject', requireAdmin, (req, res, next) => setApproval(req, res, next, 'REJECTED'));
 router.post('/admin/work-time/:uuid/request-correction', requireAdmin, (req, res, next) => setApproval(req, res, next, 'CORRECTION_REQUIRED'));
+
+router.get('/admin/work-time/weekly', requireAdmin, async (req, res, next) => {
+    try {
+        const start = weekStart(req.query.week ? `${req.query.week}T00:00:00.000Z` : new Date());
+        const end = new Date(start.getTime() + 6 * MS_DAY);
+        const from = start.toISOString().slice(0, 10);
+        const to = end.toISOString().slice(0, 10);
+        const rows = (await pool.query(
+            `SELECT d.driver_uuid, d.driver_name,
+                COUNT(*) AS day_count,
+                SUM(COALESCE(d.total_work_ms,0)) AS total_work_ms,
+                SUM(COALESCE(d.driving_ms,0)) AS driving_ms,
+                SUM(GREATEST(0, COALESCE(d.total_work_ms,0)-COALESCE(d.driving_ms,0)-COALESCE(d.break_ms,0)-COALESCE(d.rest_ms,0)-COALESCE(d.availability_ms,0))) AS work_ms,
+                SUM(COALESCE(d.break_ms,0)) AS break_ms,
+                SUM(COALESCE(d.rest_ms,0)) AS rest_ms,
+                SUM(COALESCE(d.availability_ms,0)) AS availability_ms,
+                COUNT(*) FILTER (WHERE d.end_time IS NULL OR d.status='OPEN') AS open_days,
+                COUNT(*) FILTER (WHERE COALESCE(array_length(d.anomaly_flags,1),0) > 0) AS anomaly_days,
+                COUNT(*) FILTER (WHERE e.manual_count > 0) AS manual_days,
+                COUNT(*) FILTER (WHERE d.approval_status='PENDING') AS pending,
+                COUNT(*) FILTER (WHERE d.approval_status='APPROVED') AS approved,
+                COUNT(*) FILTER (WHERE d.approval_status='REJECTED') AS rejected,
+                COUNT(*) FILTER (WHERE d.approval_status='CORRECTION_REQUIRED') AS correction_required
+             FROM work_days d
+             LEFT JOIN (
+                SELECT work_day_uuid, COUNT(*) FILTER (WHERE manual_edit=true) AS manual_count
+                FROM work_time_entries WHERE deleted_at IS NULL GROUP BY work_day_uuid
+             ) e ON e.work_day_uuid=d.uuid
+             WHERE d.deleted_at IS NULL AND d.work_date BETWEEN $1 AND $2
+             GROUP BY d.driver_uuid, d.driver_name
+             ORDER BY d.driver_name ASC`,
+            [from, to]
+        )).rows;
+        console.log(`[WORK_TIME] requestId=${req.requestId || 'unknown'} actor=admin role=${req.adminRole || 'FULL_ADMIN'} action=weekly_review_opened result=ok from=${from} to=${to}`);
+        const prev = new Date(start.getTime() - 7 * MS_DAY).toISOString().slice(0, 10);
+        const nextWeek = new Date(start.getTime() + 7 * MS_DAY).toISOString().slice(0, 10);
+        const content = `
+            <div style="margin-bottom:16px;"><a class="btn btn-outline" href="/admin/work-time/weekly">Heti review</a> <a class="btn btn-outline" href="/admin/work-time/export.csv">CSV export</a> <a class="btn btn-outline" href="/admin/work-time/export.json">JSON export</a></div>
+            <div class="card">
+                <form method="GET" style="display:flex; gap:12px; align-items:end; flex-wrap:wrap;">
+                    <a class="btn btn-outline" href="/admin/work-time/weekly?week=${prev}">Elozo het</a>
+                    <label>Het kezdete<input type="date" name="week" value="${escapeHtml(from)}"></label>
+                    <button class="btn btn-primary">Megnyitas</button>
+                    <a class="btn btn-outline" href="/admin/work-time/weekly?week=${nextWeek}">Kovetkezo het</a>
+                    <a class="btn btn-outline" href="/admin/work-time/export.csv?from=${from}&to=${to}">CSV export</a>
+                    <a class="btn btn-outline" href="/admin/work-time/export.json?from=${from}&to=${to}">JSON export</a>
+                </form>
+            </div>
+            <div class="card"><h3>${escapeHtml(from)} - ${escapeHtml(to)}</h3>
+                <table style="width:100%; border-collapse:collapse;">
+                    <thead><tr><th>Sofor</th><th>Nap</th><th>Teljes</th><th>Vezetes</th><th>Munka</th><th>Szunet</th><th>Piheno</th><th>Availability</th><th>Nyitott</th><th>Hianyos</th><th>Manual</th><th>Pending</th><th>Approved</th><th>Rejected</th><th>Correction</th></tr></thead>
+                    <tbody>${rows.map(r => `<tr onclick="location.href='/admin/work-time/weekly/${r.driver_uuid}?week=${from}'" style="cursor:pointer;">
+                        <td>${escapeHtml(r.driver_name)}</td><td>${escapeHtml(r.day_count)}</td><td>${hm(r.total_work_ms)}</td><td>${hm(r.driving_ms)}</td><td>${hm(r.work_ms)}</td><td>${hm(r.break_ms)}</td><td>${hm(r.rest_ms)}</td><td>${hm(r.availability_ms)}</td>
+                        <td>${escapeHtml(r.open_days)}</td><td>${escapeHtml(r.anomaly_days)}</td><td>${escapeHtml(r.manual_days)}</td><td>${escapeHtml(r.pending)}</td><td>${escapeHtml(r.approved)}</td><td>${escapeHtml(r.rejected)}</td><td>${escapeHtml(r.correction_required)}</td>
+                    </tr>`).join('') || '<tr><td colspan="15">Nincs adat erre a hetre.</td></tr>'}</tbody>
+                </table>
+            </div>`;
+        res.send(renderAdminLayout({ title: 'Heti munkaido', content, activeMenu: 'worktime', csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.get('/admin/work-time/weekly/:driverUuid', requireAdmin, async (req, res, next) => {
+    if (!UUID_RE.test(req.params.driverUuid)) return res.status(400).send('Invalid driver UUID.');
+    try {
+        const start = weekStart(req.query.week ? `${req.query.week}T00:00:00.000Z` : new Date());
+        const from = start.toISOString().slice(0, 10);
+        const to = new Date(start.getTime() + 6 * MS_DAY).toISOString().slice(0, 10);
+        const rows = (await pool.query(
+            `SELECT d.*, t.name AS tour_name, COALESCE(e.entry_count,0) AS entry_count, COALESCE(e.manual_count,0) AS manual_count
+             FROM work_days d
+             LEFT JOIN tours t ON t.uuid=d.tour_uuid
+             LEFT JOIN (
+                SELECT work_day_uuid, COUNT(*) AS entry_count, COUNT(*) FILTER (WHERE manual_edit=true) AS manual_count
+                FROM work_time_entries WHERE deleted_at IS NULL GROUP BY work_day_uuid
+             ) e ON e.work_day_uuid=d.uuid
+             WHERE d.deleted_at IS NULL AND d.driver_uuid=$1 AND d.work_date BETWEEN $2 AND $3
+             ORDER BY d.work_date ASC`,
+            [req.params.driverUuid, from, to]
+        )).rows;
+        const total = rows.reduce((acc, r) => {
+            acc.total += Number(r.total_work_ms || 0); acc.driving += Number(r.driving_ms || 0); acc.break += Number(r.break_ms || 0); acc.rest += Number(r.rest_ms || 0); acc.availability += Number(r.availability_ms || 0);
+            return acc;
+        }, { total: 0, driving: 0, break: 0, rest: 0, availability: 0 });
+        const content = `
+            <div style="margin-bottom:16px;"><a href="/admin/work-time/weekly?week=${from}">Vissza a heti osszesitohoz</a></div>
+            <div class="card"><h3>${escapeHtml(rows[0]?.driver_name || 'Sofor')} - ${escapeHtml(from)} / ${escapeHtml(to)}</h3>
+                <b>Heti teljes: ${hm(total.total)}</b> <b>Vezetes: ${hm(total.driving)}</b> <b>Szunet: ${hm(total.break)}</b> <b>Piheno: ${hm(total.rest)}</b> <b>Availability: ${hm(total.availability)}</b>
+            </div>
+            <div class="card">
+                <form id="bulkForm">
+                <table style="width:100%; border-collapse:collapse;"><thead><tr><th></th><th>Datum</th><th>Kezdes</th><th>Vege</th><th>Teljes</th><th>Vezetes</th><th>Munka</th><th>Szunet</th><th>Piheno</th><th>Approval</th><th>Jelzes</th><th>Tour</th></tr></thead>
+                <tbody>${rows.map(r => `<tr>
+                    <td><input type="checkbox" name="days" value="${escapeHtml(r.uuid)}" ${r.status === 'OPEN' ? 'disabled' : ''}></td>
+                    <td><a href="/admin/work-time/${r.uuid}">${escapeHtml(r.work_date)}</a></td><td>${escapeHtml(fmt(r.start_time))}</td><td>${escapeHtml(fmt(r.end_time))}</td><td>${hm(r.total_work_ms)}</td><td>${hm(r.driving_ms)}</td><td>${hm(Number(r.total_work_ms||0)-Number(r.driving_ms||0)-Number(r.break_ms||0)-Number(r.rest_ms||0)-Number(r.availability_ms||0))}</td><td>${hm(r.break_ms)}</td><td>${hm(r.rest_ms)}</td><td>${escapeHtml(r.approval_status)}</td><td>${[...(r.anomaly_flags||[]), r.entry_count === 0 ? 'NO_ENTRIES' : null, r.manual_count > 0 ? 'MANUAL' : null].filter(Boolean).map(a => `<span class="badge badge-delayed">${escapeHtml(a)}</span>`).join(' ')}</td><td>${escapeHtml(r.tour_name || '-')}</td>
+                </tr>`).join('') || '<tr><td colspan="12">Nincs adat.</td></tr>'}</tbody></table>
+                <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+                    <input name="reason" placeholder="Kozos megjegyzes / override indok">
+                    <button type="button" class="btn btn-primary" onclick="bulkAction('approve')">Kijeloltek jovahagyasa</button>
+                    <button type="button" class="btn btn-outline" onclick="bulkAction('reject')">Elutasitas</button>
+                    <button type="button" class="btn btn-outline" onclick="bulkAction('request-correction')">Korrekcio kerese</button>
+                </div>
+                </form>
+            </div>
+            <script>
+                async function bulkAction(action) {
+                    if (window.isReadOnlyAdmin) return showToast('Read-only admin nem irhat.', 'error');
+                    const form = document.getElementById('bulkForm');
+                    const days = [...form.querySelectorAll('input[name="days"]:checked')].map(i => i.value);
+                    if (!days.length) return showToast('Nincs kijelolt nap.', 'error');
+                    if (!confirm('Biztosan vegrehajtod a bulk muveletet?')) return;
+                    const res = await fetch('/admin/work-time/bulk/' + action, { method:'POST', headers:{'Content-Type':'application/json','x-csrf-token':window.adminCsrfToken}, body: JSON.stringify({ days, reason: form.reason.value }) });
+                    const body = await res.json().catch(() => ({}));
+                    if (!res.ok) return showToast(body.error || 'Bulk muvelet sikertelen.', 'error');
+                    showToast('Bulk muvelet kesz: ' + body.updated + ' rekord.'); setTimeout(() => location.reload(), 500);
+                }
+            </script>`;
+        res.send(renderAdminLayout({ title: 'Sofor heti munkaido', content, activeMenu: 'worktime', csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/admin/work-time/bulk/:action', requireAdmin, async (req, res, next) => {
+    const map = { approve: 'APPROVED', reject: 'REJECTED', 'request-correction': 'CORRECTION_REQUIRED' };
+    const status = map[req.params.action];
+    if (!status) return res.status(400).json({ error: 'Invalid bulk action.' });
+    const days = Array.isArray(req.body?.days) ? req.body.days.filter(id => UUID_RE.test(String(id))) : [];
+    if (!days.length) return res.status(400).json({ error: 'No valid work days selected.' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const rows = (await client.query('SELECT uuid, status, anomaly_flags FROM work_days WHERE uuid = ANY($1::UUID[]) AND deleted_at IS NULL', [days])).rows;
+        const blocked = rows.filter(r => r.status === 'OPEN' || (r.anomaly_flags || []).includes('SYNC_CONFLICT'));
+        if (blocked.length && !req.body?.override) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'Some selected days require documented override.', blocked: blocked.map(r => r.uuid) });
+        }
+        const updated = (await client.query(
+            `UPDATE work_days SET approval_status=$2, admin_note=$3, updated_at=$4, revision=COALESCE(revision,1)+1, sync_state='SYNCED'
+             WHERE uuid=ANY($1::UUID[]) AND deleted_at IS NULL RETURNING uuid`,
+            [days, status, req.body?.reason || null, nowMs()]
+        )).rows;
+        for (const row of updated) {
+            await audit(client, req, { workDayUuid: row.uuid, eventType: `BULK_${status}`, actorType: 'ADMIN', actorId: 'admin', reason: req.body?.reason || null });
+        }
+        await client.query('COMMIT');
+        console.log(`[WORK_TIME] requestId=${req.requestId || 'unknown'} actor=admin role=${req.adminRole || 'FULL_ADMIN'} action=bulk_${status.toLowerCase()} result=ok count=${updated.length}`);
+        res.json({ updated: updated.length, results: updated });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
+    }
+});
+
+router.get('/admin/work-time/export.csv', requireAdmin, async (req, res, next) => {
+    try {
+        const rows = await getExportRows(req.query);
+        console.log(`[WORK_TIME_EXPORT] requestId=${req.requestId || 'unknown'} actor=admin role=${req.adminRole || 'FULL_ADMIN'} format=csv driverFilter=${Boolean(req.query.driverUuid || req.query.driver_uuid)} count=${rows.length} result=ok`);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="work-time-export.csv"');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(exportRowsToCsv(rows));
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.get('/admin/work-time/export.json', requireAdmin, async (req, res, next) => {
+    try {
+        const rows = await getExportRows(req.query);
+        console.log(`[WORK_TIME_EXPORT] requestId=${req.requestId || 'unknown'} actor=admin role=${req.adminRole || 'FULL_ADMIN'} format=json driverFilter=${Boolean(req.query.driverUuid || req.query.driver_uuid)} count=${rows.length} result=ok`);
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({ exportedAt: new Date().toISOString(), filters: req.query, count: rows.length, records: rows });
+    } catch (error) {
+        next(error);
+    }
+});
 
 router.get('/admin/work-time', requireAdmin, async (req, res, next) => {
     try {
