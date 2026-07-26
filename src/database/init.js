@@ -196,6 +196,25 @@ const initDb = async () => {
             reason TEXT,
             UNIQUE(event_uuid)
         )`,
+        `CREATE TABLE IF NOT EXISTS work_time_conflicts (
+            uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            work_day_uuid UUID,
+            entry_uuid UUID,
+            driver_uuid UUID NOT NULL,
+            local_revision INT,
+            backend_revision INT,
+            local_value JSONB,
+            backend_value JSONB,
+            approval_status TEXT,
+            admin_correction BOOLEAN DEFAULT FALSE,
+            reason TEXT NOT NULL,
+            resolution_status TEXT DEFAULT 'UNRESOLVED',
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            resolved_at BIGINT,
+            updated_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+            request_id TEXT,
+            UNIQUE(uuid)
+        )`,
         `CREATE TABLE IF NOT EXISTS tours (
             id SERIAL PRIMARY KEY,
             uuid UUID DEFAULT gen_random_uuid() UNIQUE,

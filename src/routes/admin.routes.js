@@ -2,6 +2,8 @@ const express = require('express');
 const pool = require('../database/pool');
 const renderAdminLayout = require('../utils/admin-layout');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
+const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
 const { ADMIN_TOKEN, READ_ONLY_ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
 const { escapeHtml } = require('../utils/escape');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
@@ -421,6 +423,37 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
         `;
         res.send(renderAdminLayout({ title: 'Sofőradatlap', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken }));
     } catch (e) { res.status(500).send(e.message); }
+});
+
+adminRoutes.post('/drivers/:uuid/devices/:deviceId/rotate-token', requireAdmin, requireAdminWrite, async (req, res, next) => {
+    if (!UUID_RE.test(req.params.uuid)) return res.status(400).json({ error: 'Invalid driver UUID.' });
+    const token = generateDeviceToken();
+    const now = Date.now();
+    try {
+        const updated = (await pool.query(
+            `UPDATE driver_devices
+             SET device_token_hash = $1, token_rotated_at = $2, updated_at = $2, sync_state = 'SYNCED', revision = COALESCE(revision, 1) + 1
+             WHERE driver_uuid = $3 AND device_id = $4 AND deleted_at IS NULL
+             RETURNING driver_uuid, device_id, revision, token_rotated_at`,
+            [hashToken(token), now, req.params.uuid, req.params.deviceId]
+        )).rows[0];
+        if (!updated) return res.status(404).json({ error: 'Device not found.' });
+        await pool.query(
+            `INSERT INTO work_time_audit (event_uuid, event_type, new_value, actor_type, actor_id, request_id, occurred_at, reason)
+             VALUES (gen_random_uuid(), 'DEVICE_TOKEN_ROTATED', $1, 'ADMIN', 'admin', $2, $3, 'admin rotation')`,
+            [JSON.stringify({ driverUuid: updated.driver_uuid, deviceId: updated.device_id, revision: updated.revision }), req.requestId || null, now]
+        );
+        console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} event=DEVICE_TOKEN_ROTATED driver=${updated.driver_uuid} device=${updated.device_id} result=ok`);
+        res.json({
+            driverUuid: updated.driver_uuid,
+            deviceId: updated.device_id,
+            token,
+            revision: updated.revision,
+            tokenRotatedAt: updated.token_rotated_at
+        });
+    } catch (error) {
+        next(error);
+    }
 });
 
 // --- 4. Hotels ---

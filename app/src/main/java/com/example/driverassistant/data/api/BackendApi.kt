@@ -108,6 +108,23 @@ data class UnlinkDeviceRequest(
     val deviceId: String
 )
 
+data class WorkTimeConflictDto(
+    val uuid: String,
+    val workDayUuid: String? = null,
+    val entryUuid: String? = null,
+    val driverUuid: String? = null,
+    val localRevision: Int? = null,
+    val backendRevision: Int? = null,
+    val localValue: Map<String, Any?>? = null,
+    val backendValue: Map<String, Any?>? = null,
+    val approvalStatus: String? = null,
+    val adminCorrection: Boolean = false,
+    val reason: String,
+    val resolutionStatus: String = "UNRESOLVED",
+    val createdAt: Long? = null,
+    val resolvedAt: Long? = null
+)
+
 data class ProfileSyncResponse(
     val success: Boolean = true,
     val profileUpdatedAt: Long? = null
@@ -191,6 +208,21 @@ interface BackendApi {
 
     @POST("api/unlink-device")
     suspend fun unlinkDevice(@Body request: UnlinkDeviceRequest)
+
+    @GET("api/work-time/conflicts")
+    suspend fun getWorkTimeConflicts(): List<WorkTimeConflictDto>
+
+    @GET("api/work-time/conflicts/{uuid}")
+    suspend fun getWorkTimeConflict(@Path("uuid") uuid: String): WorkTimeConflictDto
+
+    @POST("api/work-time/conflicts/{uuid}/accept-server")
+    suspend fun acceptWorkTimeServerConflict(@Path("uuid") uuid: String): WorkTimeConflictDto
+
+    @POST("api/work-time/conflicts/{uuid}/reapply-local")
+    suspend fun reapplyWorkTimeLocalConflict(@Path("uuid") uuid: String): WorkTimeConflictDto
+
+    @POST("api/work-time/conflicts/{uuid}/defer")
+    suspend fun deferWorkTimeConflict(@Path("uuid") uuid: String): WorkTimeConflictDto
 
     @GET("api/get-profile/{name}")
     suspend fun getProfile(@Path("name") name: String): ApiProfileResponse

@@ -31,6 +31,7 @@ function assert(condition, message) {
 }
 
 (async () => {
+    let authenticated = false;
     const health = await request('/health');
     assert(health.status === 200, '/health must be 200');
     assert(!health.headers['x-powered-by'], 'x-powered-by must be absent');
@@ -48,10 +49,13 @@ function assert(condition, message) {
     }
 
     if (readOnlyToken) {
+        authenticated = true;
         for (const path of ['/admin', '/admin/drivers', '/admin/hotels', '/admin/tours', '/admin/work-time', '/admin/work-time/weekly']) {
             const response = await request(path, { headers: { authorization: `Bearer ${readOnlyToken}`, accept: 'text/html' } });
             assert(response.status === 200, `${path} read-only bearer access must be 200`);
             assert(!response.body.includes('Internal Server Error'), `${path} must not return 500 body`);
+            assert(!response.body.includes('Error:'), `${path} must not expose stack traces`);
+            assert(!String(response.body).match(/<button[^>]*(Ment|Torol|Jovahagy|Elutasit)/i), `${path} read-only UI must not expose active write buttons`);
         }
         const denied = await request('/admin/work-time/bulk/approve', {
             method: 'POST',
@@ -60,12 +64,16 @@ function assert(condition, message) {
         });
         assert(denied.status === 403, 'read-only write attempt must be 403');
     } else {
-        console.log('[SMOKE] PRODUCTION_SMOKE_ADMIN_TOKEN not set; authenticated read-only checks skipped.');
+        console.log('[SMOKE] PARTIAL: PRODUCTION_SMOKE_ADMIN_TOKEN not set; authenticated read-only checks skipped.');
     }
 
     const syncVersion = await request('/api/sync/version');
     assert(syncVersion.status === 200, '/api/sync/version must be 200');
-    console.log('[SMOKE] production read-only smoke passed');
+    if (!authenticated && process.env.SMOKE_ALLOW_PARTIAL !== 'true') {
+        console.log('[SMOKE] PARTIAL production smoke completed; set PRODUCTION_SMOKE_ADMIN_TOKEN for authenticated validation.');
+        process.exit(2);
+    }
+    console.log(authenticated ? '[SMOKE] production authenticated read-only smoke passed' : '[SMOKE] production partial smoke passed');
 })().catch((error) => {
     console.error('[SMOKE] failed:', error.message);
     process.exit(1);

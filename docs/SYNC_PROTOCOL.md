@@ -54,7 +54,7 @@ The server uses optimistic locking:
 - Server compares it with the current row `revision`.
 - If stale, server returns `409 SYNC_CONFLICT` with the current server row.
 - Android `DeltaSyncEngine` stops push processing on 409 so the UI/repository can reload current server state before retrying.
-- Sprint F shows Work Time conflict state on the dedicated Android Work Time screen when local records carry `syncState = CONFLICT`.
+- Sprint G stores Work Time conflicts in `work_time_conflicts` and exposes device-authenticated conflict resolution routes. Android shows a conflict list with local/backend revision and values, and supports accept-server, reapply-local, and defer.
 
 ## Logging
 

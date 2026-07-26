@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.driverassistant.data.api.WorkTimeConflictDto
 import com.example.driverassistant.domain.model.WorkTime
 import com.example.driverassistant.ui.viewmodel.DashboardViewModel
 import java.text.SimpleDateFormat
@@ -18,6 +19,8 @@ import java.util.Locale
 fun WorkTimeScreen(viewModel: DashboardViewModel = hiltViewModel()) {
     val workTimes by viewModel.workTimes.collectAsState()
     val ongoing by viewModel.ongoingWorkTime.collectAsState()
+    val serverConflicts by viewModel.workTimeConflicts.collectAsState()
+    LaunchedEffect(Unit) { viewModel.refreshWorkTimeConflicts() }
     val now by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
             value = System.currentTimeMillis()
@@ -25,7 +28,7 @@ fun WorkTimeScreen(viewModel: DashboardViewModel = hiltViewModel()) {
         }
     }
     val pending = workTimes.count { it.syncState != "SYNCED" }
-    val conflicts = workTimes.count { it.syncState == "CONFLICT" }
+    val conflicts = workTimes.count { it.syncState == "CONFLICT" } + serverConflicts.count { it.resolutionStatus == "UNRESOLVED" }
     val approval = workTimes.firstOrNull { it.approvalStatus != "PENDING" }?.approvalStatus ?: "PENDING"
 
     LazyColumn(
@@ -73,6 +76,53 @@ fun WorkTimeScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                     Text("Időtartam: ${durationText((entry.endTime ?: now) - entry.startTime)} · Sync: ${entry.syncState}")
                     if (entry.manualEdit) Text("Admin/manual korrekció", color = MaterialTheme.colorScheme.error)
                     if (entry.correctionReason != null) Text("Indok: ${entry.correctionReason}")
+                }
+            }
+        }
+        if (serverConflicts.isNotEmpty()) {
+            item { Text("Konfliktusok", style = MaterialTheme.typography.titleMedium) }
+            items(serverConflicts, key = { it.uuid }) { conflict ->
+                ConflictCard(
+                    conflict = conflict,
+                    onAcceptServer = { viewModel.acceptServerConflict(conflict.uuid) },
+                    onReapplyLocal = { viewModel.reapplyLocalConflict(conflict.uuid) },
+                    onDefer = { viewModel.deferConflict(conflict.uuid) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConflictCard(
+    conflict: WorkTimeConflictDto,
+    onAcceptServer: () -> Unit,
+    onReapplyLocal: () -> Unit,
+    onDefer: () -> Unit
+) {
+    val manualReview = conflict.approvalStatus == "APPROVED" || conflict.adminCorrection || conflict.reason.contains("SOFT_DELETED")
+    ElevatedCard {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("UUID: ${conflict.uuid}", style = MaterialTheme.typography.labelLarge)
+            Text("Allapot: ${conflict.resolutionStatus} · Ok: ${conflict.reason}")
+            Text("Nap: ${conflict.workDayUuid ?: "-"} · Entry: ${conflict.entryUuid ?: "-"}")
+            Text("Helyi revision: ${conflict.localRevision ?: "-"} · Backend revision: ${conflict.backendRevision ?: "-"}")
+            Text("Approval: ${conflict.approvalStatus ?: "-"} · Admin correction: ${if (conflict.adminCorrection) "igen" else "nem"}")
+            Text("Letrehozva: ${conflict.createdAt?.let(::timeText) ?: "-"}")
+            Text("Helyi: ${conflict.localValue?.toString() ?: "-"}")
+            Text("Backend: ${conflict.backendValue?.toString() ?: "-"}")
+            if (manualReview) {
+                Text("Manual admin review szukseges.", color = MaterialTheme.colorScheme.error)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onAcceptServer, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED") {
+                    Text("Szerver")
+                }
+                OutlinedButton(onClick = onReapplyLocal, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED" && !manualReview) {
+                    Text("Helyi ujra")
+                }
+                OutlinedButton(onClick = onDefer, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED") {
+                    Text("Kesobb")
                 }
             }
         }

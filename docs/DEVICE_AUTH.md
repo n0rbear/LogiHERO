@@ -1,6 +1,6 @@
 # Device Auth
 
-Sprint F hardens `/api/work-time/*` routes with device ownership checks.
+`/api/work-time/*` routes use device ownership checks.
 
 Android sends:
 
@@ -16,6 +16,14 @@ The backend verifies:
 - device belongs to that driver;
 - SHA-256 token hash matches with timing-safe comparison.
 
-The raw token is returned only during activation and is stored by Android preferences for now. It is never logged by backend code and is not rendered in admin HTML. The backend stores only `device_token_hash` and `token_rotated_at`.
+The raw token is returned only during activation or explicit admin token rotation. It is stored by Android through `DeviceCredentialStore`, protected by Android Keystore AES/GCM. It is never logged by backend code and is not rendered in persistent admin HTML. The backend stores only `device_token_hash` and `token_rotated_at`.
 
-Future hardening should move Android token storage to Android Keystore-backed encrypted preferences and add an explicit rotation endpoint for non-activation rotation.
+Credential failures return specific states: `MISSING`, `INVALID`, `DEVICE_DISABLED`, `DRIVER_DISABLED`, or `REACTIVATION_REQUIRED`.
+
+Admin token rotation:
+
+```http
+POST /admin/drivers/:uuid/devices/:deviceId/rotate-token
+```
+
+Only `FULL_ADMIN` may rotate. The response includes the new raw token once. The previous token is immediately invalid because its hash is replaced.

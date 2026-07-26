@@ -19,7 +19,7 @@ async function requireDeviceAuth(req, res, next) {
 
     if (!deviceId || !token || !driverUuid) {
         console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=auth_failed result=401 reason=missing`);
-        return res.status(401).json({ error: 'Device authentication required.' });
+        return res.status(401).json({ error: 'DEVICE_CREDENTIAL_MISSING', credentialState: 'MISSING' });
     }
 
     try {
@@ -32,13 +32,21 @@ async function requireDeviceAuth(req, res, next) {
             [deviceId, driverUuid]
         );
         const row = result.rows[0];
-        if (!row || !row.device_token_hash || !safeEqual(hashToken(token), row.device_token_hash)) {
-            console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=auth_failed result=401 reason=invalid`);
-            return res.status(401).json({ error: 'Device authentication failed.' });
+        if (!row) {
+            console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=auth_failed result=401 reason=reactivation_required`);
+            return res.status(401).json({ error: 'REACTIVATION_REQUIRED', credentialState: 'REACTIVATION_REQUIRED' });
         }
-        if (!row.is_active || row.deleted_at || !row.driver_active) {
+        if (!row.device_token_hash || !safeEqual(hashToken(token), row.device_token_hash)) {
+            console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=auth_failed result=401 reason=invalid`);
+            return res.status(401).json({ error: 'DEVICE_CREDENTIAL_INVALID', credentialState: 'INVALID' });
+        }
+        if (!row.is_active || row.deleted_at) {
             console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=device_disabled result=403`);
-            return res.status(403).json({ error: 'Device is not active.' });
+            return res.status(403).json({ error: 'DEVICE_DISABLED', credentialState: 'DEVICE_DISABLED' });
+        }
+        if (!row.driver_active) {
+            console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=driver_disabled result=403`);
+            return res.status(403).json({ error: 'DRIVER_DISABLED', credentialState: 'DRIVER_DISABLED' });
         }
         req.deviceAuth = { deviceId, driverUuid, driverName: row.driver_name || null };
         await pool.query('UPDATE driver_devices SET last_seen_at = $1 WHERE device_id = $2', [Date.now(), deviceId]);

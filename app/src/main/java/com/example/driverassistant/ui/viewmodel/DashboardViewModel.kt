@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.data.api.OsrmApi
+import com.example.driverassistant.data.api.WorkTimeConflictDto
 import com.example.driverassistant.data.sync.DeltaSyncEngine
 import com.example.driverassistant.data.sync.DeltaSyncResult
 import com.example.driverassistant.domain.model.Hotel
@@ -69,6 +70,9 @@ class DashboardViewModel @Inject constructor(
     }.map { all ->
         all.firstOrNull()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    private val _workTimeConflicts = MutableStateFlow<List<WorkTimeConflictDto>>(emptyList())
+    val workTimeConflicts = _workTimeConflicts.asStateFlow()
 
     private val _lastData = MutableStateFlow<Pair<String, Int>?>(null)
     val lastData = _lastData.asStateFlow()
@@ -545,6 +549,7 @@ class DashboardViewModel @Inject constructor(
                     }
                     is DeltaSyncResult.Conflict -> {
                         android.util.Log.w("SyncDebug", "DashboardViewModel: Work Time conflict ${result.conflict.error}")
+                        refreshWorkTimeConflicts()
                     }
                     is DeltaSyncResult.Failed -> {
                         android.util.Log.e("SyncDebug", "DashboardViewModel: Delta Work Time sync failed", result.error)
@@ -577,6 +582,41 @@ class DashboardViewModel @Inject constructor(
     fun updateWorkTime(workTime: WorkTime) {
         viewModelScope.launch {
             repository.updateWorkTime(workTime)
+        }
+    }
+
+    fun refreshWorkTimeConflicts() {
+        viewModelScope.launch {
+            runCatching { backendApi.getWorkTimeConflicts() }
+                .onSuccess { _workTimeConflicts.value = it }
+                .onFailure { android.util.Log.w("SyncDebug", "Could not load Work Time conflicts", it) }
+        }
+    }
+
+    fun acceptServerConflict(uuid: String) {
+        viewModelScope.launch {
+            runCatching { backendApi.acceptWorkTimeServerConflict(uuid) }
+                .onSuccess { refreshWorkTimeConflicts() }
+                .onFailure { android.util.Log.w("SyncDebug", "Could not accept server Work Time conflict", it) }
+        }
+    }
+
+    fun reapplyLocalConflict(uuid: String) {
+        viewModelScope.launch {
+            runCatching { backendApi.reapplyWorkTimeLocalConflict(uuid) }
+                .onSuccess {
+                    refreshWorkTimeConflicts()
+                    syncWithBackend()
+                }
+                .onFailure { android.util.Log.w("SyncDebug", "Could not reapply Work Time conflict", it) }
+        }
+    }
+
+    fun deferConflict(uuid: String) {
+        viewModelScope.launch {
+            runCatching { backendApi.deferWorkTimeConflict(uuid) }
+                .onSuccess { refreshWorkTimeConflicts() }
+                .onFailure { android.util.Log.w("SyncDebug", "Could not defer Work Time conflict", it) }
         }
     }
 }

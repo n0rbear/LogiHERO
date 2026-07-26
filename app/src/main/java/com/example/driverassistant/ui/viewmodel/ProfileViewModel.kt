@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.driverassistant.domain.model.SavedLocation
 import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.domain.repository.LocationRepository
+import com.example.driverassistant.data.security.DeviceCredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
@@ -25,6 +26,7 @@ class ProfileViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val prefs = context.getSharedPreferences("driver_prefs", Context.MODE_PRIVATE)
+    private val credentialStore = DeviceCredentialStore(context).also { it.migrateLegacyTokenIfNeeded() }
     private var driverUuid: String? = prefs.getString("driver_uuid", null)
     private var profileUpdatedAt: Long = prefs.getLong("profile_updated_at", 0L)
     private val deviceId: String = prefs.getString("device_id", null) ?: java.util.UUID.randomUUID().toString().also {
@@ -97,7 +99,10 @@ class ProfileViewModel @Inject constructor(
                 return@launch
             }
             if (!remote.deviceToken.isNullOrBlank()) {
-                prefs.edit().putString("device_token", remote.deviceToken).apply()
+                if (!credentialStore.saveDeviceToken(remote.deviceToken)) {
+                    _events.emit("Az eszköz token biztonságos mentése nem sikerült. Újraaktiválás szükséges.")
+                    return@launch
+                }
             }
             applyRemoteProfile(
                 uuid = remote.uuid,
@@ -285,6 +290,7 @@ class ProfileViewModel @Inject constructor(
 
             // 4. Clear profile binding but keep this local device id for future pairing.
             prefs.edit().clear().putString("device_id", deviceId).apply()
+            credentialStore.clear()
             driverUuid = null
             _driverUuidFlow.value = null
             profileUpdatedAt = 0L

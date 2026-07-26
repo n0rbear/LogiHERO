@@ -9,4 +9,4 @@ Sprint F introduces two admin roles:
 
 Read-only admins may view dashboard, drivers, hotels, tours and Work Time pages. Unsafe admin methods (`POST`, `PUT`, `PATCH`, `DELETE`) return `403` for read-only sessions or bearer/header token use.
 
-Production smoke can use `PRODUCTION_SMOKE_ADMIN_TOKEN` or `READ_ONLY_ADMIN_TOKEN`; it must perform read-only checks only.
+Production smoke can use `PRODUCTION_SMOKE_ADMIN_TOKEN` or `READ_ONLY_ADMIN_TOKEN`; it must perform read-only checks only. Missing authenticated smoke token is a partial result, not a full pass.

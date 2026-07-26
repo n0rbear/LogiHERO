@@ -5,6 +5,7 @@ import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.data.api.MistralApi
 import com.example.driverassistant.data.api.OsrmApi
 import com.example.driverassistant.BuildConfig
+import com.example.driverassistant.data.security.DeviceCredentialStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -25,8 +26,11 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(@ApplicationContext context: Context): OkHttpClient {
+        val credentialStore = DeviceCredentialStore(context).also { it.migrateLegacyTokenIfNeeded() }
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
+            redactHeader("x-device-token")
+            redactHeader("authorization")
         }
         return OkHttpClient.Builder()
             .addInterceptor { chain ->
@@ -34,7 +38,7 @@ object NetworkModule {
                 val builder = chain.request().newBuilder()
                     .header("x-request-id", UUID.randomUUID().toString())
                 prefs.getString("device_id", null)?.let { builder.header("x-device-id", it) }
-                prefs.getString("device_token", null)?.let { builder.header("x-device-token", it) }
+                credentialStore.getDeviceToken()?.let { builder.header("x-device-token", it) }
                 prefs.getString("driver_uuid", null)?.let { builder.header("x-driver-uuid", it) }
                 val request = builder.build()
                 chain.proceed(request)

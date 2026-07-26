@@ -107,6 +107,14 @@ Run read-only production smoke:
 npm run smoke:production
 ```
 
+Run Android connected tests on Windows:
+
+```powershell
+.\scripts\android-connected-test.ps1
+```
+
+The helper finds the Android SDK, starts an existing AVD or creates `LogiHERO_API_35` with API 35 Google APIs x86_64 when command-line tools are available, waits for `sys.boot_completed=1`, then runs `connectedAndroidTest`.
+
 ## Production Build Metadata
 
 The `/version` and `/health/version` endpoints expose only safe metadata:

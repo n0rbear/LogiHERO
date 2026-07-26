@@ -187,7 +187,225 @@ function validateTimestamp(value, fallback = nowMs()) {
     return { timestamp };
 }
 
+function publicConflict(row) {
+    return {
+        uuid: row.uuid,
+        workDayUuid: row.work_day_uuid,
+        entryUuid: row.entry_uuid,
+        driverUuid: row.driver_uuid,
+        localRevision: row.local_revision,
+        backendRevision: row.backend_revision,
+        localValue: row.local_value,
+        backendValue: row.backend_value,
+        approvalStatus: row.approval_status,
+        adminCorrection: row.admin_correction,
+        reason: row.reason,
+        resolutionStatus: row.resolution_status,
+        createdAt: row.created_at,
+        resolvedAt: row.resolved_at
+    };
+}
+
+async function createConflict(client, req, fields) {
+    const row = (await client.query(
+        `INSERT INTO work_time_conflicts
+            (work_day_uuid, entry_uuid, driver_uuid, local_revision, backend_revision, local_value, backend_value, approval_status, admin_correction, reason, resolution_status, created_at, updated_at, request_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'UNRESOLVED',$11,$11,$12)
+         RETURNING *`,
+        [
+            fields.workDayUuid || null,
+            fields.entryUuid || null,
+            fields.driverUuid,
+            fields.localRevision || null,
+            fields.backendRevision || null,
+            JSON.stringify(fields.localValue || {}),
+            JSON.stringify(fields.backendValue || {}),
+            fields.approvalStatus || null,
+            Boolean(fields.adminCorrection),
+            fields.reason,
+            nowMs(),
+            req.requestId || null
+        ]
+    )).rows[0];
+    await audit(client, req, {
+        workDayUuid: fields.workDayUuid,
+        entryUuid: fields.entryUuid,
+        eventType: 'SYNC_CONFLICT_CREATED',
+        oldValue: fields.backendValue,
+        newValue: fields.localValue,
+        actorType: 'DRIVER',
+        actorId: fields.driverUuid,
+        reason: fields.reason
+    });
+    console.log(`[WORK_TIME] requestId=${req.requestId || 'unknown'} event=SYNC_CONFLICT_CREATED driver=${fields.driverUuid} conflict=${row.uuid} reason=${fields.reason}`);
+    return row;
+}
+
+async function assertAndroidMayWriteWorkDay(client, req, workDayUuid, localRevision, localValue = {}) {
+    if (!workDayUuid) return { ok: true };
+    const day = (await client.query('SELECT * FROM work_days WHERE uuid = $1', [workDayUuid])).rows[0];
+    if (!day) return { ok: true };
+    const driverUuid = req.deviceAuth?.driverUuid;
+    const adminCorrection = Boolean(day.admin_note) || (day.anomaly_flags || []).includes('ADMIN_CORRECTED');
+    let status = null;
+    let reason = null;
+    if (String(day.driver_uuid) !== String(driverUuid)) {
+        status = 403;
+        reason = 'DRIVER_OWNERSHIP_FORBIDDEN';
+    } else if (day.deleted_at) {
+        status = 409;
+        reason = 'SOFT_DELETED_RECORD';
+    } else if (day.approval_status === 'APPROVED') {
+        status = 409;
+        reason = 'APPROVED_RECORD_LOCKED';
+    } else if (adminCorrection) {
+        status = 409;
+        reason = 'ADMIN_CORRECTED_RECORD_LOCKED';
+    } else if (localRevision && Number(day.revision || 1) !== Number(localRevision)) {
+        status = 409;
+        reason = 'STALE_REVISION';
+    }
+    if (!status) return { ok: true, day };
+    const conflict = status === 409 ? await createConflict(client, req, {
+        workDayUuid,
+        driverUuid,
+        localRevision,
+        backendRevision: day.revision,
+        localValue,
+        backendValue: day,
+        approvalStatus: day.approval_status,
+        adminCorrection,
+        reason
+    }) : null;
+    return { ok: false, status, reason, conflict };
+}
+
 router.use('/api/work-time', requireDeviceAuth);
+
+router.get('/api/work-time/conflicts', async (req, res, next) => {
+    try {
+        const rows = (await pool.query(
+            `SELECT * FROM work_time_conflicts
+             WHERE driver_uuid = $1
+             ORDER BY created_at DESC LIMIT 100`,
+            [req.deviceAuth.driverUuid]
+        )).rows;
+        console.log(`[WORK_TIME] requestId=${req.requestId || 'unknown'} event=conflict_list driver=${req.deviceAuth.driverUuid} result=ok`);
+        res.json(rows.map(publicConflict));
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.get('/api/work-time/conflicts/:uuid', async (req, res, next) => {
+    if (!UUID_RE.test(req.params.uuid)) return res.status(400).json({ error: 'Invalid UUID.' });
+    try {
+        const row = (await pool.query(
+            'SELECT * FROM work_time_conflicts WHERE uuid = $1 AND driver_uuid = $2',
+            [req.params.uuid, req.deviceAuth.driverUuid]
+        )).rows[0];
+        if (!row) return res.status(404).json({ error: 'Conflict not found.' });
+        res.json(publicConflict(row));
+    } catch (error) {
+        next(error);
+    }
+});
+
+async function resolveConflict(req, res, next, action) {
+    if (!UUID_RE.test(req.params.uuid)) return res.status(400).json({ error: 'Invalid UUID.' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const conflict = (await client.query(
+            'SELECT * FROM work_time_conflicts WHERE uuid = $1 AND driver_uuid = $2 FOR UPDATE',
+            [req.params.uuid, req.deviceAuth.driverUuid]
+        )).rows[0];
+        if (!conflict) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Conflict not found.' });
+        }
+        if (conflict.resolution_status !== 'UNRESOLVED') {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'CONFLICT_ALREADY_RESOLVED', resolutionStatus: conflict.resolution_status });
+        }
+
+        const backend = conflict.backend_value || {};
+        let resolutionStatus = 'DEFERRED';
+        let eventType = 'SYNC_CONFLICT_DEFERRED';
+        if (action === 'accept-server') {
+            resolutionStatus = 'SERVER_ACCEPTED';
+            eventType = 'SYNC_CONFLICT_SERVER_ACCEPTED';
+            if (conflict.work_day_uuid && backend.uuid) {
+                await client.query(
+                    `UPDATE work_days
+                     SET sync_state='SYNCED', revision=$2, updated_at=$3
+                     WHERE uuid=$1 AND driver_uuid=$4`,
+                    [conflict.work_day_uuid, Number(conflict.backend_revision || backend.revision || 1), nowMs(), req.deviceAuth.driverUuid]
+                );
+            }
+        } else if (action === 'reapply-local') {
+            const requiresAdmin = conflict.approval_status === 'APPROVED'
+                || conflict.admin_correction
+                || conflict.reason === 'SOFT_DELETED_RECORD'
+                || conflict.reason === 'TIME_OVERLAP_FORBIDDEN';
+            if (requiresAdmin) {
+                await audit(client, req, {
+                    workDayUuid: conflict.work_day_uuid,
+                    entryUuid: conflict.entry_uuid,
+                    eventType: 'SYNC_CONFLICT_ADMIN_REVIEW_REQUIRED',
+                    oldValue: backend,
+                    newValue: conflict.local_value,
+                    actorType: 'DRIVER',
+                    actorId: req.deviceAuth.driverUuid,
+                    reason: conflict.reason
+                });
+                await client.query('ROLLBACK');
+                return res.status(409).json({ error: 'MANUAL_REVIEW_REQUIRED', reason: conflict.reason });
+            }
+            resolutionStatus = 'LOCAL_REAPPLIED';
+            eventType = 'SYNC_CONFLICT_LOCAL_REAPPLIED';
+        }
+
+        const updated = (await client.query(
+            `UPDATE work_time_conflicts
+             SET resolution_status=$2, resolved_at=$3, updated_at=$3
+             WHERE uuid=$1 RETURNING *`,
+            [conflict.uuid, resolutionStatus, nowMs()]
+        )).rows[0];
+        await audit(client, req, {
+            workDayUuid: conflict.work_day_uuid,
+            entryUuid: conflict.entry_uuid,
+            eventType,
+            oldValue: backend,
+            newValue: conflict.local_value,
+            actorType: 'DRIVER',
+            actorId: req.deviceAuth.driverUuid,
+            reason: conflict.reason
+        });
+        if (resolutionStatus !== 'DEFERRED') {
+            await audit(client, req, {
+                workDayUuid: conflict.work_day_uuid,
+                entryUuid: conflict.entry_uuid,
+                eventType: 'SYNC_CONFLICT_RESOLVED',
+                actorType: 'DRIVER',
+                actorId: req.deviceAuth.driverUuid,
+                reason: resolutionStatus
+            });
+        }
+        await client.query('COMMIT');
+        console.log(`[WORK_TIME] requestId=${req.requestId || 'unknown'} event=${eventType} driver=${req.deviceAuth.driverUuid} conflict=${conflict.uuid} result=ok`);
+        res.json(publicConflict(updated));
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
+    }
+}
+
+router.post('/api/work-time/conflicts/:uuid/accept-server', (req, res, next) => resolveConflict(req, res, next, 'accept-server'));
+router.post('/api/work-time/conflicts/:uuid/reapply-local', (req, res, next) => resolveConflict(req, res, next, 'reapply-local'));
+router.post('/api/work-time/conflicts/:uuid/defer', (req, res, next) => resolveConflict(req, res, next, 'defer'));
 
 router.get('/api/work-time/current', async (req, res, next) => {
     const client = await pool.connect();
@@ -396,6 +614,13 @@ async function correctEntry(req, res, next, actorType = 'ADMIN') {
         if (!entry) {
             await client.query('ROLLBACK');
             return res.status(404).json({ error: 'Entry not found.' });
+        }
+        if (actorType === 'DRIVER') {
+            const guard = await assertAndroidMayWriteWorkDay(client, req, entry.work_day_uuid, req.body?.baseRevision || req.body?.revision, req.body || {});
+            if (!guard.ok) {
+                await client.query('ROLLBACK');
+                return res.status(guard.status).json({ error: guard.reason, conflict: guard.conflict ? publicConflict(guard.conflict) : undefined });
+            }
         }
         const expectedRevision = Number(req.body?.revision || 0);
         if (expectedRevision && Number(entry.revision || 1) !== expectedRevision) {
