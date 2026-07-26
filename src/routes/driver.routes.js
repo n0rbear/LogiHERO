@@ -1,9 +1,42 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const crypto = require('node:crypto');
 
 const driverProfileRoutes = express.Router();
 const driverReadRoutes = express.Router();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const textOrNull = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
+const numberOrNull = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+function sanitizeAdminDriver(body) {
+    const d = body || {};
+    const name = textOrNull(d.name);
+    const email = textOrNull(d.email);
+    if (!name) throw Object.assign(new Error('A név kötelező.'), { statusCode: 400 });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Object.assign(new Error('Hibás email cím.'), { statusCode: 400 });
+    if (d.uuid && !UUID_RE.test(d.uuid)) throw Object.assign(new Error('Hibás sofőr UUID.'), { statusCode: 400 });
+    return {
+        uuid: d.uuid || null,
+        name,
+        email,
+        phone: textOrNull(d.phone),
+        whatsapp: textOrNull(d.whatsapp),
+        telegram: textOrNull(d.telegram),
+        license_plate: textOrNull(d.license_plate),
+        photo_url: textOrNull(d.photo_url),
+        is_active: d.is_active === true || d.is_active === 'true' || d.is_active === 'on',
+        home_lat: numberOrNull(d.home_lat),
+        home_lng: numberOrNull(d.home_lng),
+        base_lat: numberOrNull(d.base_lat),
+        base_lng: numberOrNull(d.base_lng)
+    };
+}
 
 driverProfileRoutes.post('/api/activate-driver', async (req, res) => {
     const { code, deviceId, deviceName } = req.body;
@@ -128,16 +161,25 @@ driverProfileRoutes.post('/admin/unlink-driver-devices', requireAdmin, async (re
 });
 
 driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) => {
-    const d = req.body;
+    let d;
+    try {
+        d = sanitizeAdminDriver(req.body);
+    } catch (e) {
+        return res.status(e.statusCode || 400).json({ error: e.message });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         if (d.uuid) {
             // Régi név lekérése a módosítás előtt
             const oldRes = await client.query('SELECT name FROM drivers WHERE uuid = $1', [d.uuid]);
+            if (!oldRes.rows[0]) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: 'Sofőr nem található.' });
+            }
             const oldName = oldRes.rows[0]?.name;
 
-            await client.query(
+            const updated = await client.query(
                 `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12, profile_updated_at=$13 WHERE uuid=$14`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, Date.now(), d.uuid]
             );
@@ -150,19 +192,23 @@ driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) =>
                     await client.query(`UPDATE ${t} SET driver_name = $1 WHERE driver_name = $2`, [d.name, oldName]);
                 }
             }
+            await client.query('COMMIT');
+            return res.json({ success: true, uuid: d.uuid, updated: updated.rowCount });
         } else {
-            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-            await client.query(
-                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, profile_updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code, Date.now()]
+            const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+            const inserted = await client.query(
+                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active, home_lat, home_lng, base_lat, base_lng, profile_updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 RETURNING uuid`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, Date.now()]
             );
+            await client.query('COMMIT');
+            return res.json({ success: true, uuid: inserted.rows[0].uuid, activation_code: code });
         }
-        await client.query('COMMIT');
-        res.json({ success: true });
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[ADMIN-SAVE-ERROR] ${e.message}`);
-        res.status(500).send(e.message);
+        res.status(e.code === '23505' ? 409 : 500).json({ error: e.code === '23505' ? 'A sofőr neve vagy aktiváló kódja már létezik.' : e.message });
     } finally {
         client.release();
     }
@@ -170,10 +216,13 @@ driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) =>
 
 driverProfileRoutes.post('/admin/delete-driver', requireAdmin, async (req, res) => {
     const { uuid } = req.body;
+    if (!UUID_RE.test(uuid || '')) return res.status(400).json({ error: 'Hibás sofőr UUID.' });
     try {
-        await pool.query('DELETE FROM drivers WHERE uuid = $1', [uuid]);
+        const result = await pool.query('UPDATE drivers SET is_active = false, profile_updated_at = $1 WHERE uuid = $2 RETURNING uuid', [Date.now(), uuid]);
+        if (!result.rows[0]) return res.status(404).json({ error: 'Sofőr nem található.' });
+        await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE driver_uuid = $2', [Date.now(), uuid]);
         res.json({ success: true });
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 driverReadRoutes.get('/api/all-drivers', async (req, res) => {

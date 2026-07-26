@@ -6,21 +6,31 @@ const ndp = require('../integrations/ndp-client');
 
 const hotelManagementRoutes = express.Router();
 const hotelReadRoutes = express.Router();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const VALID_HOTEL_STATUSES = new Set(['PLANNED', 'BOOKED', 'CONFIRMED', 'CHECKED_IN', 'CHECKED_OUT', 'CANCELLED', 'PROBLEM']);
+const textOrNull = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
+const numberOrNull = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
 
 function sanitizeHotel(body) {
+    const lat = numberOrNull(body.latitude);
+    const lng = numberOrNull(body.longitude);
     return {
         tourId: body.tourId || body.tour_id || null,
         stopId: body.stopId || body.stop_id || null,
         driverId: body.driverId || body.driver_id || null,
         driverName: body.driverName || body.driver_name || null,
-        name: body.name || '',
-        addressLine1: body.addressLine1 || body.address_line_1 || body.address || '',
+        name: textOrNull(body.name) || '',
+        addressLine1: textOrNull(body.addressLine1 || body.address_line_1 || body.address) || '',
         addressLine2: body.addressLine2 || body.address_line_2 || null,
         postalCode: body.postalCode || body.postal_code || null,
         city: body.city || '',
         country: body.country || null,
-        latitude: HotelEngine.isValidCoordinate(body.latitude, body.longitude) ? Number(body.latitude) : null,
-        longitude: HotelEngine.isValidCoordinate(body.latitude, body.longitude) ? Number(body.longitude) : null,
+        latitude: lat !== null && lng !== null && HotelEngine.isValidCoordinate(lat, lng) ? lat : null,
+        longitude: lat !== null && lng !== null && HotelEngine.isValidCoordinate(lat, lng) ? lng : null,
         phone: body.phone || body.phoneNumber || body.phone_number || null,
         bookingNumber: body.bookingNumber || body.booking_number || '',
         bookingProvider: body.bookingProvider || body.booking_provider || null,
@@ -30,7 +40,7 @@ function sanitizeHotel(body) {
         checkOutTime: body.checkOutTime || body.check_out_time || null,
         numberOfNights: body.numberOfNights || body.number_of_nights || null,
         numberOfRooms: body.numberOfRooms || body.number_of_rooms || null,
-        status: body.status || HotelEngine.HOTEL_STATUSES.PLANNED,
+        status: VALID_HOTEL_STATUSES.has(body.status) ? body.status : HotelEngine.HOTEL_STATUSES.PLANNED,
         notes: body.notes || null,
         streetViewUrl: body.streetViewUrl || body.street_view_url || null,
         externalMapUrl: body.externalMapUrl || body.external_map_url || null,
@@ -169,38 +179,48 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, async (req,
     const { source, id, uuid } = req.body;
     const h = sanitizeHotel(req.body);
     const now = Date.now();
+    if (!h.name) return res.status(400).json({ error: 'A hotelnév kötelező.' });
+    if (uuid && !UUID_RE.test(uuid)) return res.status(400).json({ error: 'Hibás hotel UUID.' });
+    if (id && !Number.isFinite(Number(id))) return res.status(400).json({ error: 'Hibás hotel ID.' });
     try {
         if (source === 'stop') {
             const result = await pool.query(
-                `UPDATE stops SET recipient=$1, address_full=$2, room_number=$3, entry_code=$4, booking_number=$5, phone_number=$6, email=$7, notes=$8, updated_at=$9
-                 WHERE ${uuid ? 'uuid::text = $10' : 'id = $10'}
-                 RETURNING 'stop'::TEXT as source, id, uuid::TEXT, COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, room_number, entry_code, booking_number, phone_number, email, notes, updated_at::BIGINT as timestamp`,
-                [h.name, h.addressLine1, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, now, uuid || id]
+                `UPDATE stops SET recipient=$1, address_full=$2, room_number=$3, entry_code=$4, booking_number=$5,
+                    phone_number=$6, email=$7, notes=$8, latitude=$9, longitude=$10, stop_status=$11, stop_date=$12, updated_at=$13
+                 WHERE ${uuid ? 'uuid::text = $14' : 'id = $14'}
+                 RETURNING 'stop'::TEXT as source, id, uuid::TEXT, COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address,
+                    room_number, entry_code, booking_number, phone_number, email, notes, latitude, longitude, stop_status AS status, updated_at::BIGINT as timestamp`,
+                [h.name, h.addressLine1, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.latitude, h.longitude, h.status, h.checkInDate, now, uuid || id]
             );
-            if (!result.rows[0]) return res.sendStatus(404);
+            if (!result.rows[0]) return res.status(404).json({ error: 'Hotel stop nem található.' });
             return res.json({ ...result.rows[0], timestamp: Number(result.rows[0].timestamp || now) });
         }
 
         if (id || uuid) {
             const result = await pool.query(
-                `UPDATE hotels SET name=$1, address_line_1=$2, room_number=$3, entry_code=$4, booking_number=$5, phone=$6, email=$7, notes=$8, updated_at=$9
-                 WHERE ${uuid ? 'uuid::text = $10' : 'id = $10'}
-                 RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code, booking_number, phone as phone_number, email, notes, updated_at as timestamp`,
-                [h.name, h.addressLine1, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, now, uuid || id]
+                `UPDATE hotels SET name=$1, driver_name=$2, address_line_1=$3, city=$4, latitude=$5, longitude=$6,
+                    room_number=$7, entry_code=$8, booking_number=$9, phone=$10, email=$11, notes=$12,
+                    check_in_date=$13, check_out_date=$14, status=$15, updated_at=$16
+                 WHERE ${uuid ? 'uuid::text = $17' : 'id = $17'}
+                 RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code,
+                    booking_number, phone as phone_number, email, notes, latitude, longitude, status, updated_at as timestamp`,
+                [h.name, h.driverName, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now, uuid || id]
             );
-            if (!result.rows[0]) return res.sendStatus(404);
+            if (!result.rows[0]) return res.status(404).json({ error: 'Hotel nem található.' });
             return res.json({ ...result.rows[0], timestamp: Number(result.rows[0].timestamp || now) });
         }
 
         const result = await pool.query(
-            `INSERT INTO hotels (uuid, tour_id, driver_name, name, address_line_1, room_number, entry_code, booking_number, phone, email, notes, created_at, updated_at)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
-             RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code, booking_number, phone as phone_number, email, notes, updated_at as timestamp`,
-            [h.tourId, h.driverName, h.name, h.addressLine1, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, now]
+            `INSERT INTO hotels (uuid, tour_id, driver_name, name, address_line_1, city, latitude, longitude, room_number,
+                entry_code, booking_number, phone, email, notes, check_in_date, check_out_date, status, created_at, updated_at)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)
+             RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code,
+                booking_number, phone as phone_number, email, notes, latitude, longitude, status, updated_at as timestamp`,
+            [h.tourId, h.driverName, h.name, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now]
         );
         res.json({ ...result.rows[0], timestamp: Number(result.rows[0].timestamp || now) });
     } catch (e) {
-        res.status(500).send(e.message);
+        res.status(500).json({ error: e.message });
     }
 });
 

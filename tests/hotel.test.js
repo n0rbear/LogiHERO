@@ -4,6 +4,13 @@ const pool = require('../src/database/pool');
 const HotelEngine = require('../src/engines/hotel-engine');
 
 test('Hotel Core - Status transitions and idempotency', async (t) => {
+    try {
+        await pool.query('SELECT 1');
+    } catch (e) {
+        t.skip(`Local PostgreSQL unavailable: ${e.code || e.message}`);
+        return;
+    }
+
     // Setup: Create a test tour and hotel
     const tourRes = await pool.query("INSERT INTO tours (name, driver_name) VALUES ('Test Tour', 'Test Driver') RETURNING id");
     const tourId = tourRes.rows[0].id;
