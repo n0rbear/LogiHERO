@@ -47,6 +47,7 @@ const ndp = require('./src/integrations/ndp-client');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: false }));
 setupUploads(app);
 
 // Public Assets & Routes

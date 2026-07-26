@@ -572,7 +572,7 @@ tourCoreRoutes.post('/api/tours/:id/stops/:stopId/complete', async (req, res) =>
 
 const renderAdminLayout = require('../utils/admin-layout');
 
-tourCoreRoutes.get('/admin/tours', requireAdmin, async (_req, res) => {
+tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
     const styles = `
         main.tour-main { display: grid; grid-template-columns: 360px 1fr; gap: 24px; height: calc(100vh - 160px); }
         .tour-sidebar { overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
@@ -709,7 +709,7 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (_req, res) => {
         </script>
     `;
 
-    res.send(renderAdminLayout({ title: 'Túrák', content, activeMenu: 'tours', styles, scripts }));
+    res.send(renderAdminLayout({ title: 'Túrák', content, activeMenu: 'tours', styles, scripts, csrfToken: req.adminCsrfToken }));
 });
 
 module.exports = tourCoreRoutes;

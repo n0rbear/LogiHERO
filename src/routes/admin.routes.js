@@ -2,7 +2,15 @@ const express = require('express');
 const pool = require('../database/pool');
 const renderAdminLayout = require('../utils/admin-layout');
 const requireAdmin = require('../middleware/requireAdmin');
-const { ADMIN_TOKEN } = require('../config/env');
+const { ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
+const { escapeHtml } = require('../utils/escape');
+const {
+    createAdminSession,
+    destroyAdminSession,
+    getAdminSession,
+    verifyAdminToken,
+    SESSION_TTL_MS
+} = require('../utils/admin-session');
 const crypto = require('node:crypto');
 
 const adminRoutes = express.Router();
@@ -22,8 +30,11 @@ adminRoutes.get('/login', (req, res) => {
         `);
     }
 
-    const cookies = req.headers.cookie ? Object.fromEntries(req.headers.cookie.split(';').map(c => c.trim().split('='))) : {};
-    if (cookies['admin_session'] === ADMIN_TOKEN) return res.redirect('/admin');
+    const cookies = req.headers.cookie ? Object.fromEntries(req.headers.cookie.split(';').map(c => {
+        const [name, ...rest] = c.trim().split('=');
+        return [name, decodeURIComponent(rest.join('='))];
+    })) : {};
+    if (getAdminSession(cookies['admin_session'])) return res.redirect('/admin');
 
     res.send(`<!DOCTYPE html>
 <html>
@@ -71,15 +82,23 @@ adminRoutes.get('/login', (req, res) => {
 
 adminRoutes.post('/login', (req, res) => {
     const { token } = req.body;
-    if (token === ADMIN_TOKEN) {
-        res.cookie('admin_session', token, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
-        return res.json({ success: true });
+    if (verifyAdminToken(token, ADMIN_TOKEN)) {
+        const session = createAdminSession();
+        res.cookie('admin_session', session.id, {
+            httpOnly: true,
+            secure: IS_DEPLOYED,
+            sameSite: 'lax',
+            path: '/',
+            maxAge: SESSION_TTL_MS
+        });
+        return res.json({ success: true, csrfToken: session.csrfToken });
     }
     res.sendStatus(401);
 });
 
-adminRoutes.post('/logout', (req, res) => {
-    res.clearCookie('admin_session');
+adminRoutes.post('/logout', requireAdmin, (req, res) => {
+    destroyAdminSession(req.adminSession?.id);
+    res.clearCookie('admin_session', { httpOnly: true, secure: IS_DEPLOYED, sameSite: 'lax', path: '/' });
     res.redirect('/admin/login');
 });
 
@@ -156,7 +175,7 @@ adminRoutes.get(['/', '/dashboard'], requireAdmin, async (req, res) => {
                 </div>
             </div>
         `;
-        res.send(renderAdminLayout({ title: 'Dashboard', content, activeMenu: 'dashboard' }));
+        res.send(renderAdminLayout({ title: 'Dashboard', content, activeMenu: 'dashboard', csrfToken: req.adminCsrfToken }));
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -222,61 +241,33 @@ adminRoutes.get('/drivers', requireAdmin, async (req, res) => {
                 }
                 async function regenerateCode(uuid) {
                     if(!confirm('Új kódot generálsz? A régi azonnal érvényét veszti.')) return;
-                    const r = await fetch('/admin/api/drivers/' + uuid + '/regenerate', { method: 'POST' });
+                    const r = await fetch('/admin/api/drivers/' + uuid + '/regenerate', { method: 'POST', headers: { 'x-csrf-token': window.adminCsrfToken } });
                     if(r.ok) { showToast('Új kód generálva!'); revealCode(uuid); }
                 }
             </script>
         `;
-        res.send(renderAdminLayout({ title: 'Sofőrök', content, activeMenu: 'drivers', scripts }));
+        res.send(renderAdminLayout({ title: 'Sofőrök', content, activeMenu: 'drivers', scripts, csrfToken: req.adminCsrfToken }));
     } catch (e) { res.status(500).send(e.message); }
 });
 
 adminRoutes.get('/drivers/new', requireAdmin, (req, res) => {
     const content = `<div class="card" style="text-align:center; padding:64px;"><h3>👤 Új sofőr felvétele</h3><p style="color:var(--color-text-muted);">Ez a funkció a következő sprintben érkezik.</p><button class="btn btn-primary" onclick="history.back()" style="margin-top:20px;">Vissza</button></div>`;
-    res.send(renderAdminLayout({ title: 'Új sofőr', content, activeMenu: 'drivers' }));
+    res.send(renderAdminLayout({ title: 'Új sofőr', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken }));
 });
 
 adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
     const content = `<div class="card" style="text-align:center; padding:64px;"><h3>📝 Sofőradatlap</h3><p style="color:var(--color-text-muted);">Részletes szerkesztés a következő sprintben.</p><button class="btn btn-primary" onclick="history.back()" style="margin-top:20px;">Vissza</button></div>`;
-    res.send(renderAdminLayout({ title: 'Sofőradatlap', content, activeMenu: 'drivers' }));
+    res.send(renderAdminLayout({ title: 'Sofőradatlap', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken }));
 });
 
-// --- 4. Tours ---
-
-adminRoutes.get('/tours', requireAdmin, async (req, res) => {
-    const content = `
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-        <div style="display:grid; grid-template-columns: 360px 1fr; gap:24px; height:calc(100vh - 160px);">
-            <div style="display:flex; flex-direction:column; gap:16px; overflow-y:auto;">
-                <div class="card" style="padding:16px;"><input type="text" placeholder="Túra keresése..." style="width:100%;"></div>
-                <div id="tours-list" style="display:flex; flex-direction:column; gap:12px;">Betöltés...</div>
-            </div>
-            <div id="admin-tour-map" style="background:#eee; border-radius:12px; border:1px solid var(--color-border);"></div>
-        </div>
-    `;
-    const scripts = `
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <script>
-            const map = L.map('admin-tour-map').setView([47.5, 19.04], 7);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-            async function load() {
-                const tours = await (await fetch('/api/tours')).json();
-                document.getElementById('tours-list').innerHTML = tours.map(t => '<div class="card" style="padding:12px; cursor:pointer;"><b>'+esc(t.name)+'</b><div style="font-size:11px; color:var(--color-text-muted); margin-top:4px;">'+esc(t.driver_name || 'Nincs sofőr')+' | '+t.tour_status+'</div></div>').join('');
-            }
-            load();
-        </script>
-    `;
-    res.send(renderAdminLayout({ title: 'Túrák', content, activeMenu: 'tours', scripts }));
-});
-
-// --- 5. Hotels ---
+// --- 4. Hotels ---
 
 adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
     const content = `<div class="card" style="text-align:center; padding:64px;"><h3>🏨 Hotelmenedzsment</h3><p style="color:var(--color-text-muted);">Fejlesztés alatt.</p><button class="btn btn-primary" onclick="history.back()" style="margin-top:20px;">Vissza</button></div>`;
-    res.send(renderAdminLayout({ title: 'Hotelek', content, activeMenu: 'hotels' }));
+    res.send(renderAdminLayout({ title: 'Hotelek', content, activeMenu: 'hotels', csrfToken: req.adminCsrfToken }));
 });
 
-// --- 6. Internal API ---
+// --- 5. Internal API ---
 
 adminRoutes.get('/api/drivers/:uuid/code', requireAdmin, async (req, res) => {
     try {
@@ -293,14 +284,14 @@ adminRoutes.post('/api/drivers/:uuid/regenerate', requireAdmin, async (req, res)
     } catch (e) { res.status(500).send(e.message); }
 });
 
-// --- 7. Placeholders ---
+// --- 6. Placeholders ---
 
 const placeholders = ['cargo', 'costs', 'worktime', 'work-times', 'settings'];
 placeholders.forEach(p => {
     adminRoutes.get('/' + p, requireAdmin, (req, res) => {
         const labels = { 'cargo': 'Cargo', 'costs': 'Költségek', 'worktime': 'Munkaidő', 'work-times': 'Munkaidő', 'settings': 'Beállítások' };
         const content = `<div class="card" style="text-align:center; padding:64px;"><h3>⏳ ${labels[p]} modul fejlesztés alatt</h3><p>Hamarosan...</p></div>`;
-        res.send(renderAdminLayout({ title: labels[p], content, activeMenu: p.includes('work') ? 'worktime' : p }));
+        res.send(renderAdminLayout({ title: labels[p], content, activeMenu: p.includes('work') ? 'worktime' : p, csrfToken: req.adminCsrfToken }));
     });
 });
 

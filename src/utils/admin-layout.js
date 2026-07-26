@@ -1,6 +1,6 @@
 const { escapeHtml } = require('./escape');
 
-const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = '' }) => {
+const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = '', csrfToken = '' }) => {
     const menuItems = [
         { id: 'dashboard', label: 'Dashboard', icon: '📊', path: '/admin' },
         { id: 'tours', label: 'Túrák', icon: '🚛', path: '/admin/tours' },
@@ -25,6 +25,7 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LogiHERO Admin | ${escapeHtml(title)}</title>
+    <meta name="csrf-token" content="${escapeHtml(csrfToken)}">
     <style>
         :root {
             --color-bg: #f0f2f5;
@@ -252,6 +253,7 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
                     Tesztadatok
                 </label>
                 <form action="/admin/logout" method="POST" style="margin:0;">
+                    <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}">
                     <button type="submit" class="btn btn-outline" style="padding:6px 12px; font-size:13px;">Kijelentkezés</button>
                 </form>
             </div>
@@ -265,6 +267,8 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
     <div id="toast-container" style="position:fixed; bottom:24px; right:24px; z-index:9999;"></div>
 
     <script>
+        window.adminCsrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
         function showToast(msg, type = 'success') {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');

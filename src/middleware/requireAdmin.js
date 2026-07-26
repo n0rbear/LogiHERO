@@ -1,4 +1,27 @@
 const { ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
+const {
+    getAdminSession,
+    verifyAdminToken,
+    verifyCsrfToken
+} = require('../utils/admin-session');
+
+const parseCookies = (header) => {
+    if (!header) return {};
+    return Object.fromEntries(header.split(';').map((cookie) => {
+        const [name, ...rest] = cookie.trim().split('=');
+        return [name, decodeURIComponent(rest.join('='))];
+    }));
+};
+
+const wantsJson = (req) => {
+    const accept = req.headers.accept || '';
+    return req.originalUrl.includes('/api/') ||
+        req.xhr ||
+        req.headers['x-requested-with'] === 'XMLHttpRequest' ||
+        accept.includes('application/json');
+};
+
+const isUnsafeMethod = (method) => !['GET', 'HEAD', 'OPTIONS'].includes(method);
 
 const requireAdmin = (req, res, next) => {
     // 1. Check if ADMIN_TOKEN is configured
@@ -22,34 +45,47 @@ const requireAdmin = (req, res, next) => {
         return next(); // Allow in local dev without token
     }
 
-    // 2. Extract token from various sources
-    let token = null;
+    // 2. Extract supported token/session sources.
+    let bearerToken = null;
+    let headerToken = null;
+    let session = null;
 
     // a. Authorization Header (API usage)
     const header = req.headers.authorization || '';
     if (header.startsWith('Bearer ')) {
-        token = header.slice(7);
+        bearerToken = header.slice(7);
     }
 
-    // b. Custom Headers or Query Params
-    if (!token) {
-        token = req.headers['x-admin-token'] || req.query.adminToken;
+    // b. Optional custom header for internal automation.
+    if (!bearerToken) {
+        headerToken = req.headers['x-admin-token'];
     }
 
     // c. Cookie (Browser usage)
-    if (!token && req.headers.cookie) {
-        const cookies = Object.fromEntries(req.headers.cookie.split(';').map(c => c.trim().split('=')));
-        token = cookies['admin_session'];
+    if (!bearerToken && !headerToken) {
+        const cookies = parseCookies(req.headers.cookie);
+        session = getAdminSession(cookies['admin_session']);
     }
 
     // 3. Verify token
-    if (token === ADMIN_TOKEN) {
+    if (verifyAdminToken(bearerToken || headerToken, ADMIN_TOKEN)) {
+        req.adminAuthType = bearerToken ? 'bearer' : 'header';
+        return next();
+    }
+
+    if (session) {
+        req.adminAuthType = 'cookie';
+        req.adminSession = session;
+        req.adminCsrfToken = session.csrfToken;
+        if (isUnsafeMethod(req.method) && !verifyCsrfToken(session, req.headers['x-csrf-token'] || req.body?._csrf)) {
+            return res.status(403).json({ error: 'CSRF token invalid or missing.' });
+        }
         return next();
     }
 
     // 4. Handle unauthorized
     // If it's a browser request (not an API call), redirect to login
-    const isApiRequest = req.originalUrl.includes('/api/') || req.headers['accept'] === 'application/json';
+    const isApiRequest = wantsJson(req);
 
     if (!isApiRequest && req.originalUrl.startsWith('/admin')) {
         // Avoid loop if already on login page
