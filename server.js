@@ -1,4 +1,4 @@
-﻿// FIXED SERVER v17 - TRACE LIVE UPDATES
+﻿// FIXED SERVER v18 - ADMIN UX CONSOLIDATION
 const express = require('express');
 const initDb = require('./src/database/init');
 const { PORT } = require('./src/config/env');
@@ -37,94 +37,64 @@ const devResetRoutes = require('./src/routes/dev-reset.routes');
 const devSeedRoutes = require('./src/routes/dev-seed.routes');
 const createAdminSaveTourRoutes = require('./src/routes/admin-save-tour.routes');
 const adminTransferTourRoutes = require('./src/routes/admin-transfer-tour.routes');
-const adminHotelViewRoutes = require('./src/routes/admin-hotel-view.routes');
-const adminDriverRoutes = require('./src/routes/admin-driver.routes');
+const adminRoutes = require('./src/routes/admin.routes');
 const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
 const { escapeHtml, escapeJsString } = require('./src/utils/escape');
 const ImportEngine = require('./src/engines/import-engine');
 const StatusEngine = require('./src/engines/status-engine');
 const ndp = require('./src/integrations/ndp-client');
+
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 setupUploads(app);
 
+// Public Assets & Routes
 app.use(downloadRoutes);
-
-app.use(worktimeReadRoutes);
-
-app.use(costReadRoutes);
-
 app.use(healthRoutes);
 
+// Consolidated Admin UI & Protected Routes
+app.use('/admin', adminRoutes);
+
+// Driver & Live Data APIs
 app.use(createLiveUpdateRoutes({ StatusEngine }));
-
 app.use(historyRoutes);
-
 app.use(chatRoutes);
-
-app.use(worktimeSyncRoutes);
-
-app.use(costManagementRoutes);
-
-app.use(hotelManagementRoutes);
-
-app.use(devResetRoutes);
-
-app.use(devSeedRoutes);
-
 app.use(currentTourRoutes);
-
-// ==========================================
-// DRIVER PROFILE & AUTH
-// ==========================================
-
 app.use(driverProfileRoutes);
-
 app.use(uploadRoutes);
-
 app.use(driverReadRoutes);
-
 app.use(createSyncTourRoutes({ ImportEngine }));
-
 app.use(tourRoutes);
-
 app.use(tourCoreRoutes);
-
 app.use(cargoRoutes);
-
 app.use(hotelReadRoutes);
-
-app.use(createAdminSaveTourRoutes({ ImportEngine }));
-
-app.use(adminTransferTourRoutes);
-
-app.use(adminHotelViewRoutes);
-
-app.use(adminDriverRoutes);
-
-app.use(adminTourRoutes);
-
+app.use(worktimeReadRoutes);
+app.use(costReadRoutes);
 app.use(fleetRoutes);
-
 app.use(statsRoutes);
 
-app.use(createRootRoutes({ escapeHtml }));
+// Admin Action APIs (POST)
+app.use(createAdminSaveTourRoutes({ ImportEngine }));
+app.use(adminTransferTourRoutes);
+app.use(adminTourRoutes);
+app.use(hotelManagementRoutes);
+app.use(costManagementRoutes);
+app.use(worktimeSyncRoutes);
 
+// Dev Tools
+app.use(devResetRoutes);
+app.use(devSeedRoutes);
+
+// Public Root & Driver Dashboard
+app.use(createRootRoutes());
 app.use(createDriverDashboardRoutes({ escapeHtml, escapeJsString }));
 
 const start = async () => {
     try {
         await initDb();
         app.listen(PORT, () => {
-            console.log('[STARTUP] Express server starting on port ' + PORT);
-            ndp.trackEvent({
-                traceId: 'server-started-' + Date.now(),
-                eventType: 'server_started',
-                title: 'LogiHERO backend started',
-                component: 'backend',
-                payload: { port: String(PORT) }
-            });
+            console.log('[STARTUP] LogiHERO server starting on port ' + PORT);
         });
     } catch (err) {
         console.error('[STARTUP] Fatal error during initDb:', err);

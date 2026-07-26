@@ -246,11 +246,14 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
                 <button class="menu-toggle" onclick="document.body.classList.toggle('sidebar-open')">☰</button>
                 <h2 class="page-title">${escapeHtml(title)}</h2>
             </div>
-            <div class="top-bar-actions" style="display:flex; gap:12px; align-items:center;">
+            <div class="top-bar-actions" style="display:flex; gap:20px; align-items:center;">
                 <label style="font-size:13px; color:var(--color-text-muted); display:flex; align-items:center; gap:8px; cursor:pointer;">
                     <input type="checkbox" id="test-data-toggle" onchange="toggleTestData(this.checked)">
-                    Tesztadatok megjelenítése
+                    Tesztadatok
                 </label>
+                <form action="/admin/logout" method="POST" style="margin:0;">
+                    <button type="submit" class="btn btn-outline" style="padding:6px 12px; font-size:13px;">Kijelentkezés</button>
+                </form>
             </div>
         </header>
 
