@@ -200,10 +200,14 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
         .btn-outline:hover { background: #f8f9fa; }
 
         .test-data-row {
-            display: none; /* Controlled by JS/CSS toggle */
+            display: none !important;
         }
 
         body.show-test-data .test-data-row {
+            display: block !important;
+        }
+
+        body.show-test-data tr.test-data-row {
             display: table-row !important;
         }
 

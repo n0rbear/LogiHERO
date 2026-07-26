@@ -80,6 +80,11 @@ adminHotelViewRoutes.get('/admin/hotels', requireAdmin, async (req, res) => {
                     const driver = document.getElementById('hotel-driverFilter').value;
                     const date = document.getElementById('hotel-dateFilter').value;
 
+                    const isTestData = (name) => {
+                        const n = (name || '').toLowerCase();
+                        return n.includes('test') || n.includes('demo') || n.includes('qa') || n.includes('pilot') || n.includes('ismeretlen');
+                    };
+
                     const filtered = allHotels.filter(h => {
                         const matchesSearch = !q || h.name.toLowerCase().includes(q) || (h.city || '').toLowerCase().includes(q);
                         const matchesStatus = !status || h.status === status;
@@ -90,7 +95,7 @@ adminHotelViewRoutes.get('/admin/hotels', requireAdmin, async (req, res) => {
 
                     const list = document.getElementById('hotel-list-container');
                     list.innerHTML = filtered.map(h => \`
-                        <div class="hotel-card \${h.status === 'PROBLEM' ? 'problem' : ''} \${h.status === 'CHECKED_IN' ? 'active' : ''}" onclick="focusHotel(\${h.id})">
+                        <div class="hotel-card \${h.status === 'PROBLEM' ? 'problem' : ''} \${h.status === 'CHECKED_IN' ? 'active' : ''} \${isTestData(h.name) || isTestData(h.driver_name) ? 'test-data-row' : ''}" onclick="focusHotel(\${h.id})">
                             <div style="display:flex; justify-content:space-between; align-items:start;">
                                 <h4 style="margin:0;">\${esc(h.name)}</h4>
                                 <span class="badge \${getHotelStatusClass(h.status)}">\${h.status}</span>

@@ -629,8 +629,12 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (_req, res) => {
 
             function renderTours(tours) {
                 const container = document.getElementById('tours-list-container');
+                const isTestData = (name) => {
+                    const n = (name || '').toLowerCase();
+                    return n.includes('test') || n.includes('demo') || n.includes('qa') || n.includes('pilot') || n.includes('ismeretlen');
+                };
                 container.innerHTML = tours.map(t => \`
-                    <div class="tour-item" onclick="openTour(\${t.id})">
+                    <div class="tour-item \${isTestData(t.name) || isTestData(t.driver_name) ? 'test-data-row' : ''}" onclick="openTour(\${t.id})">
                         <div style="font-weight:600;">\${esc(t.name)}</div>
                         <div class="tour-status-text">\${esc(t.driver_name || 'Nincs sofőr')} | \${esc(t.tour_status || 'PLANNED')}</div>
                     </div>
