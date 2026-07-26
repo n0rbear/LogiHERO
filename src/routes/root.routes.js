@@ -76,7 +76,10 @@ rootRoutes.get(['/', '/admin/'], async (req, res) => {
             <div id="toast-container"></div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <h1>🚛 Flotta kiválasztása</h1>
-                <button class="btn-admin" id="admin-toggle" onclick="toggleAdmin()">⚙️ SOFŐRÖK KEZELÉSE</button>
+                <div style="display:flex; gap:10px;">
+                    <button class="btn-admin" onclick="location.href='/admin/hotels'">🏨 HOTELEK</button>
+                    <button class="btn-admin" id="admin-toggle" onclick="toggleAdmin()">⚙️ SOFŐRÖK KEZELÉSE</button>
+                </div>
             </div>
 
             <div id="fleet-section" class="section active">

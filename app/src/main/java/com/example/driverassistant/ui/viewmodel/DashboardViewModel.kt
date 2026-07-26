@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.data.api.OsrmApi
+import com.example.driverassistant.domain.model.Hotel
 import com.example.driverassistant.domain.model.Stop
 import com.example.driverassistant.domain.model.WorkTime
 import com.example.driverassistant.domain.repository.DriverRepository
@@ -232,6 +233,19 @@ class DashboardViewModel @Inject constructor(
             android.util.Log.d("DashboardTrace", "DashboardViewModel.nextStop EMIT: ${stop.contactName}, isCompleted: ${stop.isCompleted}")
         } else {
             android.util.Log.d("DashboardTrace", "DashboardViewModel.nextStop EMIT: NULL")
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val nextHotel = currentTour.flatMapLatest { tour ->
+        if (tour != null) {
+            repository.getHotelsForTour(tour.id).map { hotels ->
+                hotels.filter { it.status != "CHECKED_OUT" && it.status != "CANCELLED" }
+                    .sortedBy { it.checkInDate ?: "" }
+                    .firstOrNull()
+            }
+        } else {
+            flowOf(null)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 

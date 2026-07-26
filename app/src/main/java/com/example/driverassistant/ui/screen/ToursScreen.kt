@@ -26,8 +26,6 @@ import com.example.driverassistant.domain.model.Stop
 import com.example.driverassistant.domain.model.Tour
 import com.example.driverassistant.ui.components.AILoadingAnimation
 import com.example.driverassistant.ui.viewmodel.ToursViewModel
-import androidx.activity.result.launch
-import com.example.driverassistant.util.FileUtils
 import com.example.driverassistant.util.IntentUtils
 import java.text.SimpleDateFormat
 import java.util.*
@@ -63,8 +61,9 @@ private fun formatDuration(seconds: Long?): String {
 
 @Composable
 fun ToursScreen(
-    viewModel: ToursViewModel = hiltViewModel(),
-    onNavigateToCargo: (Long) -> Unit = {}
+    onNavigateToCargo: (Long) -> Unit = {},
+    onOpenHotel: (Long) -> Unit = {},
+    viewModel: ToursViewModel = hiltViewModel()
 ) {
     val tours by viewModel.tours.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
@@ -74,10 +73,6 @@ fun ToursScreen(
 
     LaunchedEffect(Unit) {
         viewModel.syncToursWithBackend()
-        while(true) {
-            kotlinx.coroutines.delay(60000)
-            viewModel.syncToursWithBackend()
-        }
     }
 
     LaunchedEffect(syncError) {
@@ -119,7 +114,8 @@ fun ToursScreen(
                             tour = tour, 
                             viewModel = viewModel, 
                             onDelete = { viewModel.deleteTour(tour) },
-                            onNavigateToCargo = onNavigateToCargo
+                            onNavigateToCargo = onNavigateToCargo,
+                            onOpenHotel = onOpenHotel
                         )
                     }
                 }
@@ -147,13 +143,15 @@ fun TourItem(
     tour: Tour, 
     viewModel: ToursViewModel, 
     onDelete: () -> Unit,
-    onNavigateToCargo: (Long) -> Unit
+    onNavigateToCargo: (Long) -> Unit,
+    onOpenHotel: (Long) -> Unit
 ) {
     val context = LocalContext.current
     val sdf = SimpleDateFormat("yyyy.MM.dd", Locale.getDefault())
     var expanded by remember { mutableStateOf(false) }
     val stops by viewModel.getStops(tour.id).collectAsState(initial = emptyList())
     val hotels by viewModel.hotels.collectAsState()
+    val tourHotels by viewModel.getHotelsForTour(tour.id).collectAsState(initial = emptyList())
     var showAddStopDialog by remember { mutableStateOf(false) }
     var showAddHotelDialog by remember { mutableStateOf(false) }
     var showEditTourDialog by remember { mutableStateOf(false) }
@@ -236,6 +234,17 @@ fun TourItem(
                             isFirst = index == 0,
                             isLast = index == stops.size - 1
                         )
+                    }
+
+                    if (tourHotels.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(text = "Hotelek (${tourHotels.size})", style = MaterialTheme.typography.titleSmall)
+                        tourHotels.forEach { hotel ->
+                            HotelListItem(
+                                hotel = hotel,
+                                onClick = { onOpenHotel(hotel.id) }
+                            )
+                        }
                     }
 
                     Button(
@@ -546,8 +555,8 @@ fun StopDetailsDialog(tour: Tour, stop: Stop, viewModel: ToursViewModel, onDismi
     val potentialNames = remember(stop.alternativeNames) {
         try {
             if (stop.alternativeNames != null) {
-                if (stop.alternativeNames.contains("|")) {
-                    stop.alternativeNames.split("|")
+                if (stop.alternativeNames!!.contains("|")) {
+                    stop.alternativeNames!!.split("|")
                 } else {
                     com.google.gson.Gson().fromJson(stop.alternativeNames, Array<String>::class.java).toList()
                 }

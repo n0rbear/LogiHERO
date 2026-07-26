@@ -119,7 +119,9 @@ async function refreshProgress(client, tourId, traceId) {
         }
     } else if (newStatus === 'IN_PROGRESS' && data.stops.every(s => s.is_completed || s.stop_status === 'SKIPPED')) {
         const blockingCargo = await checkCargoBlocking(client, tourId);
-        if (blockingCargo.length === 0) {
+        const { blocking: blockingHotels } = await HotelEngine.checkTourCompletionBlockedByHotels(client, tourId);
+
+        if (blockingCargo.length === 0 && blockingHotels.length === 0) {
             newStatus = 'COMPLETED';
             if (traceId) {
                 await ndp.trackEvent({
@@ -131,7 +133,7 @@ async function refreshProgress(client, tourId, traceId) {
                 });
             }
         } else {
-            console.log(`[TOUR] completion blocked for ${tourId} by ${blockingCargo.length} cargo items`);
+            console.log(`[TOUR] completion blocked for ${tourId} by ${blockingCargo.length} cargo items and ${blockingHotels.length} hotels`);
         }
     }
 
@@ -178,6 +180,7 @@ async function recalculateTour(client, tourId, traceId, reason = 'manual') {
     return { route, progress };
 }
 
+const HotelEngine = require('../engines/hotel-engine');
 const tourCoreRoutes = express.Router();
 
 tourCoreRoutes.get('/api/tours', async (_req, res) => {
@@ -262,13 +265,27 @@ tourCoreRoutes.patch('/api/tours/:id', requireAdmin, async (req, res) => {
         await client.query('BEGIN');
 
         if (body.tour_status === 'COMPLETED' || body.status === 'COMPLETED' || body.is_closed) {
-            const blocking = await checkCargoBlocking(client, req.params.id);
-            if (blocking.length > 0 && !body.override_reason) {
+            const blockingCargo = await checkCargoBlocking(client, req.params.id);
+            const { blocking: blockingHotels, warnings: hotelWarnings } = await HotelEngine.checkTourCompletionBlockedByHotels(client, req.params.id);
+
+            if ((blockingCargo.length > 0 || blockingHotels.length > 0) && !body.override_reason) {
                 await client.query('ROLLBACK');
+
+                if (blockingHotels.length > 0) {
+                    await ndp.trackEvent({
+                        traceId: ndp.getTraceId(req),
+                        eventType: 'tour_completion_blocked_by_hotel',
+                        title: 'Tour completion blocked by hotel',
+                        payload: { tourId: req.params.id, blockingCount: String(blockingHotels.length) }
+                    });
+                }
+
                 return res.status(409).json({
-                    error: 'TOUR_COMPLETION_BLOCKED_BY_CARGO',
-                    message: 'Cannot close tour with unresolved cargo',
-                    blockingCargo: blocking
+                    error: 'TOUR_COMPLETION_BLOCKED',
+                    message: 'Cannot close tour with unresolved items',
+                    blockingCargo,
+                    blockingHotels,
+                    hotelWarnings
                 });
             }
             if (body.override_reason) {

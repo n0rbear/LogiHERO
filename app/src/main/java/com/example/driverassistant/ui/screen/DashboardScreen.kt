@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -55,6 +56,7 @@ fun DashboardScreen(
     val isAIProcessing by aiViewModel.isProcessing.collectAsState()
     val currentTour by viewModel.currentTour.collectAsState()
     val nextStop by viewModel.nextStop.collectAsState()
+    val nextHotel by viewModel.nextHotel.collectAsState()
     val profileDepot by viewModel.profileDepot.collectAsState()
     
     SideEffect {
@@ -460,6 +462,27 @@ fun DashboardScreen(
                 }
             }
 
+            nextHotel?.let { h ->
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable { onOpenHotels() },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF16884F), contentColor = Color.White)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Hotel, contentDescription = null, modifier = Modifier.size(32.dp))
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(text = "Következő hotel", style = MaterialTheme.typography.labelSmall)
+                            Text(text = h.name, style = MaterialTheme.typography.titleMedium)
+                            Text(text = "${h.city ?: ""} | ${h.checkInDate ?: ""}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
             

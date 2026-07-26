@@ -1,0 +1,32 @@
+# Task List - Sprint 3: Hotel Core
+
+- [ ] **Phase 1: Impact Analysis & Schema Update**
+    - [x] Technical impact analysis (completed during research)
+    - [x] Modify `init.js` to expand `hotels` table (non-destructive)
+    - [x] Create `hotel_events` table in `init.js`
+- [ ] **Phase 2: Backend API Implementation**
+    - [x] Update `hotel.routes.js` with tour-linked endpoints
+    - [x] Implement status update endpoints with idempotency (`client_event_id`)
+    - [x] Implement terminal state protection and admin override (with reason)
+    - [x] Implement tour completion blocking logic in `tour-core.routes.js`
+    - [x] Integrate NDP tracking for hotel events (PII-free)
+- [ ] **Phase 3: Web Admin Updates**
+    - [ ] Create dedicated Hotel page (`/admin/hotels`) with Leaflet map
+    - [ ] Integrate hotel management into Tours detail view (CRUD)
+    - [ ] Implement search and filtering for hotels on the dedicated page
+    - [ ] Add external Street View / Map links
+- [ ] **Phase 4: Android Implementation**
+    - [x] Expand `Hotel` Room entity (partially done, verify fields)
+    - [ ] Update `DriverDao` and `DriverRepository`
+    - [ ] Implement `HotelDetailScreen` with validation (coords, phone, booking number)
+    - [ ] Update `HotelsViewModel` for sync and offline actions with idempotency
+    - [ ] Update `DashboardScreen` with hotel summary card
+    - [ ] Add coordinate-based navigation to `IntentUtils`
+- [ ] **Phase 5: Verification & Testing**
+    - [ ] Create and run backend unit tests (`tests/hotel.test.js`)
+    - [ ] Run Room migration tests with existing data
+    - [ ] Manual E2E verification on Android Emulator
+    - [ ] Manual E2E verification in Chrome
+    - [ ] Verify PII-free NDP logs
+    - [ ] Git commit and push
+

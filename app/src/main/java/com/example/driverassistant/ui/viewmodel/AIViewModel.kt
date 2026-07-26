@@ -333,15 +333,18 @@ class AIViewModel @Inject constructor(
         ))
         
         if (data.docType?.contains("Hotel", true) == true || data.docName?.contains("Hotel", true) == true) {
+            val currentTourId = repository.getCurrentTour(driverName).first()?.id ?: 0L
             repository.insertHotel(Hotel(
+                tourId = currentTourId,
                 driverName = driverName,
                 name = data.docName ?: "Szállás",
-                address = data.address ?: "Cím nem található",
+                addressLine1 = data.address ?: "Cím nem található",
+                city = "",
                 roomNumber = "",
                 entryCode = "",
-                phoneNumber = "",
+                phone = "",
                 email = "",
-                timestamp = docDate
+                updatedAt = docDate
             ))
         }
     }

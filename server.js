@@ -37,6 +37,7 @@ const devResetRoutes = require('./src/routes/dev-reset.routes');
 const devSeedRoutes = require('./src/routes/dev-seed.routes');
 const createAdminSaveTourRoutes = require('./src/routes/admin-save-tour.routes');
 const adminTransferTourRoutes = require('./src/routes/admin-transfer-tour.routes');
+const adminHotelViewRoutes = require('./src/routes/admin-hotel-view.routes');
 const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
 const { escapeHtml, escapeJsString } = require('./src/utils/escape');
@@ -96,6 +97,8 @@ app.use(hotelReadRoutes);
 app.use(createAdminSaveTourRoutes({ ImportEngine }));
 
 app.use(adminTransferTourRoutes);
+
+app.use(adminHotelViewRoutes);
 
 app.use(adminTourRoutes);
 

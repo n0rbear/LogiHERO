@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -50,15 +51,18 @@ class DocumentsViewModel @Inject constructor(
                 )
             )
             if (type.equals("Hotel", ignoreCase = true)) {
+                val currentTourId = repository.getCurrentTour(driverName).first()?.id ?: 0L
                 repository.insertHotel(Hotel(
+                    tourId = currentTourId,
                     driverName = driverName,
                     name = name,
-                    address = "Dokumentumból csatolva",
+                    addressLine1 = "Dokumentumból csatolva",
+                    city = "",
                     roomNumber = "",
                     entryCode = "",
-                    phoneNumber = "",
+                    phone = "",
                     email = "",
-                    timestamp = System.currentTimeMillis()
+                    updatedAt = System.currentTimeMillis()
                 ))
             }
         }
@@ -115,15 +119,18 @@ class DocumentsViewModel @Inject constructor(
                 
                 // Ha Hotel, mentsük el az adatbázisba is a címmel együtt
                 if (type.contains("Hotel", ignoreCase = true)) {
+                    val currentTourId = repository.getCurrentTour(driverName).first()?.id ?: 0L
                     repository.insertHotel(Hotel(
+                        tourId = currentTourId,
                         driverName = driverName,
                         name = name.ifBlank { "Szállás" },
-                        address = address.ifBlank { "Cím nem található" },
+                        addressLine1 = address.ifBlank { "Cím nem található" },
+                        city = "",
                         roomNumber = "",
                         entryCode = "",
-                        phoneNumber = "",
+                        phone = "",
                         email = "",
-                        timestamp = System.currentTimeMillis()
+                        updatedAt = System.currentTimeMillis()
                     ))
                 }
             } catch (e: Exception) {

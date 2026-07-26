@@ -28,12 +28,22 @@ interface DriverRepository {
     suspend fun deleteCost(cost: Cost)
 
     fun getAllHotels(driverName: String): Flow<List<Hotel>>
+    fun getHotelsForTour(tourId: Long): Flow<List<Hotel>>
+    fun getHotelById(id: Long): Flow<Hotel?>
     fun getHotelStops(driverName: String): Flow<List<Stop>>
     suspend fun insertHotel(hotel: Hotel)
+    suspend fun insertHotels(hotels: List<Hotel>)
     suspend fun updateHotel(hotel: Hotel)
     suspend fun deleteHotel(hotel: Hotel)
+    suspend fun deleteHotelByPublicId(publicId: String)
     suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel>
+    suspend fun getHotelsForTourSnapshot(tourId: Long): List<Hotel>
     suspend fun syncRemoteHotels(driverName: String, remoteHotels: List<Hotel>, syncStartedAt: Long)
+    
+    // Hotel Events
+    suspend fun insertHotelEvent(event: HotelEvent)
+    suspend fun getUnsyncedHotelEvents(): List<HotelEvent>
+    suspend fun markHotelEventSynced(id: Long)
 
     fun getLocationHistory(): Flow<List<LocationData>>
     suspend fun insertLocation(location: LocationData)

@@ -194,6 +194,37 @@ interface BackendApi {
     @POST("api/upload-stop-photo")
     suspend fun uploadStopPhoto(@Body request: StopPhotoUploadRequest): StopPhotoUploadResponse
 
+    // Hotels
+    @GET("api/tours/{tourId}/hotels")
+    suspend fun getHotelsForTour(@Path("tourId") tourId: Long): List<Hotel>
+
+    @POST("api/tours/{tourId}/hotels")
+    suspend fun addHotel(@Path("tourId") tourId: Long, @Body hotel: Hotel): Hotel
+
+    @GET("api/hotels/{hotelId}")
+    suspend fun getHotel(@Path("hotelId") hotelId: Long): Hotel
+
+    @PATCH("api/hotels/{hotelId}")
+    suspend fun updateHotel(@Path("hotelId") hotelId: Long, @Body hotel: Hotel): Hotel
+
+    @DELETE("api/hotels/{hotelId}")
+    suspend fun deleteHotel(@Path("hotelId") hotelId: Long): retrofit2.Response<Unit>
+
+    @POST("api/hotels/{hotelId}/confirm")
+    suspend fun confirmHotel(@Path("hotelId") hotelId: Long, @Body request: HotelStatusRequest): Hotel
+
+    @POST("api/hotels/{hotelId}/check-in")
+    suspend fun checkInHotel(@Path("hotelId") hotelId: Long, @Body request: HotelStatusRequest): Hotel
+
+    @POST("api/hotels/{hotelId}/check-out")
+    suspend fun checkOutHotel(@Path("hotelId") hotelId: Long, @Body request: HotelStatusRequest): Hotel
+
+    @POST("api/hotels/{hotelId}/cancel")
+    suspend fun cancelHotel(@Path("hotelId") hotelId: Long, @Body request: HotelStatusRequest): Hotel
+
+    @POST("api/hotels/{hotelId}/report-problem")
+    suspend fun reportHotelProblem(@Path("hotelId") hotelId: Long, @Body request: HotelStatusRequest): Hotel
+
     // Cargo
     @GET("api/tours/{tourId}/cargo")
     suspend fun getCargoForTour(@Path("tourId") tourId: Long): List<Cargo>
@@ -226,5 +257,13 @@ data class CargoTransitionRequest(
     val condition: String? = null,
     val reason: String? = null,
     val clientEventId: String? = null,
+    val metadata: String? = null
+)
+
+data class HotelStatusRequest(
+    val driverName: String,
+    val reason: String? = null,
+    val clientEventId: String? = null,
+    val isOverride: Boolean = false,
     val metadata: String? = null
 )

@@ -81,17 +81,29 @@ interface DriverDao {
     suspend fun deleteCost(cost: Cost)
 
     // Hotels
-    @Query("SELECT * FROM hotels WHERE driverName = :driverName ORDER BY timestamp DESC")
+    @Query("SELECT * FROM hotels WHERE driverName = :driverName AND deletedAt IS NULL ORDER BY checkInDate DESC")
     fun getAllHotels(driverName: String): Flow<List<Hotel>>
 
-    @Query("SELECT * FROM hotels WHERE driverName = :driverName ORDER BY timestamp DESC")
-    suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel>
+    @Query("SELECT * FROM hotels WHERE tourId = :tourId AND deletedAt IS NULL ORDER BY checkInDate DESC")
+    fun getHotelsForTour(tourId: Long): Flow<List<Hotel>>
 
-    @Query("SELECT * FROM hotels WHERE uuid = :uuid LIMIT 1")
-    suspend fun getHotelByUuid(uuid: String): Hotel?
+    @Query("SELECT * FROM hotels WHERE tourId = :tourId AND deletedAt IS NULL ORDER BY checkInDate DESC")
+    suspend fun getHotelsForTourSnapshot(tourId: Long): List<Hotel>
+
+    @Query("SELECT * FROM hotels WHERE id = :id LIMIT 1")
+    fun getHotelById(id: Long): Flow<Hotel?>
+
+    @Query("SELECT * FROM hotels WHERE driverName = :driverName AND deletedAt IS NULL ORDER BY updatedAt DESC")
+    suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHotel(hotel: Hotel)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertHotels(hotels: List<Hotel>)
+
+    @Query("SELECT * FROM hotels WHERE publicId = :publicId LIMIT 1")
+    suspend fun getHotelByPublicId(publicId: String): Hotel?
 
     @Update
     suspend fun updateHotel(hotel: Hotel)
@@ -99,8 +111,18 @@ interface DriverDao {
     @Delete
     suspend fun deleteHotel(hotel: Hotel)
 
-    @Query("DELETE FROM hotels WHERE uuid = :uuid")
-    suspend fun deleteHotelByUuid(uuid: String)
+    @Query("DELETE FROM hotels WHERE publicId = :publicId")
+    suspend fun deleteHotelByPublicId(publicId: String)
+
+    // Hotel Events (Queue)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertHotelEvent(event: HotelEvent)
+
+    @Query("SELECT * FROM hotel_events WHERE isSynced = 0 ORDER BY timestamp ASC")
+    suspend fun getUnsyncedHotelEvents(): List<HotelEvent>
+
+    @Query("UPDATE hotel_events SET isSynced = 1 WHERE id = :id")
+    suspend fun markHotelEventSynced(id: Long)
 
     // Cargo
     @Query("SELECT * FROM cargo WHERE tourId = :tourId AND deletedAt IS NULL")

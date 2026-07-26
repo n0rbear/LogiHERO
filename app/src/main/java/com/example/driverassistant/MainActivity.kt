@@ -22,10 +22,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavType
+import androidx.navigation.compose.*
+import androidx.navigation.navArgument
 import com.example.driverassistant.ui.navigation.Screen
 import com.example.driverassistant.ui.navigation.bottomNavItems
 import com.example.driverassistant.ui.screen.*
@@ -348,7 +347,23 @@ fun MainApp() {
                 composable(Screen.Report.route) { TagesfahrblattScreen() }
                 composable(Screen.Stats.route) { MonthlyStatsScreen() }
                 composable(Screen.Costs.route) { CostsScreen() }
-                composable(Screen.Hotels.route) { HotelsScreen() }
+                composable(Screen.Hotels.route) { 
+                    HotelsScreen(
+                        onOpenHotel = { hotelId ->
+                            navController.navigate("hotel_detail/$hotelId")
+                        }
+                    ) 
+                }
+                composable(
+                    route = Screen.HotelDetail.route,
+                    arguments = listOf(navArgument("hotelId") { type = NavType.LongType })
+                ) { backStackEntry ->
+                    val hotelId = backStackEntry.arguments?.getLong("hotelId") ?: 0L
+                    HotelDetailScreen(
+                        hotelId = hotelId,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
                 composable(Screen.Chat.route) { ChatScreen() }
                 composable(Screen.Profile.route) { ProfileScreen() }
                 composable(Screen.Settings.route) { SettingsScreen() }

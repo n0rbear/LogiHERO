@@ -20,9 +20,6 @@ class DriverRepositoryImpl @Inject constructor(
 
     override fun getStopsForTour(tourId: Long): Flow<List<Stop>> = dao.getStopsForTour(tourId).onEach { stops ->
         android.util.Log.d("DashboardTrace", "DriverRepository.getStopsForTour EMIT: TourID: $tourId, StopCount: ${stops.size}")
-        stops.forEach { stop ->
-            android.util.Log.d("DashboardTrace", "  Stop: ID: ${stop.id}, Name: ${stop.contactName}, isCompleted: ${stop.isCompleted}, order: ${stop.orderIndex}")
-        }
     }
     override suspend fun getStopsForTourWithDeleted(tourId: Long): List<Stop> = dao.getStopsForTourWithDeleted(tourId)
     override suspend fun getStopById(stopId: Long): Stop? = dao.getStopById(stopId)
@@ -40,63 +37,60 @@ class DriverRepositoryImpl @Inject constructor(
     override suspend fun updateCost(cost: Cost) = dao.updateCost(cost)
     override suspend fun deleteCost(cost: Cost) = dao.deleteCost(cost)
 
+    // Hotels
     override fun getAllHotels(driverName: String): Flow<List<Hotel>> = dao.getAllHotels(driverName)
+    override fun getHotelsForTour(tourId: Long): Flow<List<Hotel>> = dao.getHotelsForTour(tourId)
+    override fun getHotelById(id: Long): Flow<Hotel?> = dao.getHotelById(id)
     override fun getHotelStops(driverName: String): Flow<List<Stop>> = dao.getHotelStops(driverName)
     override suspend fun insertHotel(hotel: Hotel) = dao.insertHotel(hotel)
+    override suspend fun insertHotels(hotels: List<Hotel>) = dao.insertHotels(hotels)
     override suspend fun updateHotel(hotel: Hotel) = dao.updateHotel(hotel)
     override suspend fun deleteHotel(hotel: Hotel) = dao.deleteHotel(hotel)
+    override suspend fun deleteHotelByPublicId(publicId: String) = dao.deleteHotelByPublicId(publicId)
     override suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel> = dao.getAllHotelsSnapshot(driverName)
+    override suspend fun getHotelsForTourSnapshot(tourId: Long): List<Hotel> = dao.getHotelsForTourSnapshot(tourId)
 
     override suspend fun syncRemoteHotels(driverName: String, remoteHotels: List<Hotel>, syncStartedAt: Long) {
         val localHotels = dao.getAllHotelsSnapshot(driverName)
-        val remoteByUuid = remoteHotels
-            .filter { it.uuid.isNotBlank() }
-            .associateBy { it.uuid }
+        val remoteByPublicId = remoteHotels
+            .filter { it.publicId.isNotBlank() }
+            .associateBy { it.publicId }
 
         for (remote in remoteHotels) {
-            val existing = if (remote.uuid.isNotBlank()) dao.getHotelByUuid(remote.uuid) else null
+            val existing = if (remote.publicId.isNotBlank()) dao.getHotelByPublicId(remote.publicId) else null
             val normalizedRemote = remote.copy(
                 id = existing?.id ?: 0,
-                driverName = driverName,
-                roomNumber = remote.roomNumber,
-                entryCode = remote.entryCode,
-                bookingNumber = remote.bookingNumber,
-                phoneNumber = remote.phoneNumber,
-                email = remote.email,
-                notes = remote.notes
+                driverName = driverName
             )
 
             if (existing == null) {
                 dao.insertHotel(normalizedRemote)
-            } else if (remote.timestamp >= existing.timestamp) {
+            } else if (remote.updatedAt >= existing.updatedAt) {
                 dao.updateHotel(normalizedRemote)
             }
         }
 
-        localHotels
-            .filter { it.uuid.isNotBlank() && it.uuid !in remoteByUuid && it.timestamp <= syncStartedAt }
-            .forEach { dao.deleteHotelByUuid(it.uuid) }
+        // Deletions if we are syncing all hotels for a driver
+        if (remoteHotels.isNotEmpty()) {
+            localHotels
+                .filter { it.publicId.isNotBlank() && it.publicId !in remoteByPublicId && it.updatedAt <= syncStartedAt }
+                .forEach { dao.deleteHotelByPublicId(it.publicId) }
+        }
     }
+
+    override suspend fun insertHotelEvent(event: HotelEvent) = dao.insertHotelEvent(event)
+    override suspend fun getUnsyncedHotelEvents(): List<HotelEvent> = dao.getUnsyncedHotelEvents()
+    override suspend fun markHotelEventSynced(id: Long) = dao.markHotelEventSynced(id)
 
     override fun getLocationHistory(): Flow<List<LocationData>> = dao.getLocationHistory()
     override suspend fun insertLocation(location: LocationData) = dao.insertLocation(location)
 
     override fun getWorkTimesByDate(date: String, driverName: String): Flow<List<WorkTime>> = dao.getWorkTimesByDate(date, driverName)
     override fun getWorkTimesByPattern(pattern: String, driverName: String): Flow<List<WorkTime>> = dao.getWorkTimesByPattern(pattern, driverName)
-    override suspend fun insertWorkTime(workTime: WorkTime) {
-        android.util.Log.d("StatusTrace", "[DriverRepositoryImpl.insertWorkTime] type=${workTime.type}, driver=${workTime.driverName}, uuid=${workTime.uuid}")
-        dao.insertWorkTime(workTime)
-    }
-    override suspend fun updateWorkTime(workTime: WorkTime) {
-        android.util.Log.d("StatusTrace", "[DriverRepositoryImpl.updateWorkTime] id=${workTime.id}, type=${workTime.type}, end=${workTime.endTime}")
-        dao.updateWorkTime(workTime)
-    }
+    override suspend fun insertWorkTime(workTime: WorkTime) = dao.insertWorkTime(workTime)
+    override suspend fun updateWorkTime(workTime: WorkTime) = dao.updateWorkTime(workTime)
     override suspend fun deleteWorkTime(workTime: WorkTime) = dao.deleteWorkTime(workTime)
-    override suspend fun getAllOngoingWorkTimes(driverName: String): List<WorkTime> {
-        val result = dao.getAllOngoingWorkTimes(driverName)
-        android.util.Log.d("StatusTrace", "[DriverRepositoryImpl.getAllOngoingWorkTimes] driver=$driverName, found=${result.size}")
-        return result
-    }
+    override suspend fun getAllOngoingWorkTimes(driverName: String): List<WorkTime> = dao.getAllOngoingWorkTimes(driverName)
     override fun getOngoingWorkTimesFlow(driverName: String): Flow<List<WorkTime>> = dao.getOngoingWorkTimesFlow(driverName)
     override suspend fun closeAllOngoingWorkTimes(driverName: String, endTime: Long) = dao.closeAllOngoingWorkTimes(driverName, endTime)
 
@@ -106,8 +100,6 @@ class DriverRepositoryImpl @Inject constructor(
             if (existing == null) {
                 dao.insertWorkTime(remote.copy(id = 0))
             } else {
-                // If remote has an end time but local doesn't, or end time is different, update.
-                // WorkTimes don't have an explicit 'updated_at', but we can assume newer timestamps or just replace.
                 dao.updateWorkTime(remote.copy(id = existing.id))
             }
         }
@@ -116,7 +108,6 @@ class DriverRepositoryImpl @Inject constructor(
     override suspend fun syncRemoteCosts(driverName: String, remoteCosts: List<Cost>) {
         val localCosts = dao.getAllCosts(driverName).first()
         val remoteByUuid = remoteCosts.associateBy { it.uuid }
-        
         for (remote in remoteCosts) {
             val existing = dao.getCostByUuid(remote.uuid)
             if (existing == null) {
@@ -125,13 +116,9 @@ class DriverRepositoryImpl @Inject constructor(
                 dao.updateCost(remote.copy(id = existing.id))
             }
         }
-
-        // Handle deletions: if a cost is in local but not in remote list, and remote list is not empty, delete it locally
         if (remoteCosts.isNotEmpty()) {
             localCosts.forEach { local ->
-                if (local.uuid !in remoteByUuid) {
-                    dao.deleteCost(local)
-                }
+                if (local.uuid !in remoteByUuid) dao.deleteCost(local)
             }
         }
     }
@@ -142,118 +129,52 @@ class DriverRepositoryImpl @Inject constructor(
 
     override suspend fun deleteOldTours(timestamp: Long) = dao.deleteOldTours(timestamp)
 
-    override fun getCurrentTour(driverName: String): Flow<Tour?> = dao.getCurrentTour(driverName).onEach { tour ->
-        if (tour != null) {
-            android.util.Log.d("DashboardTrace", "DriverRepository.getCurrentTour EMIT: ID: ${tour.id}, UUID: ${tour.uuid}, Name: ${tour.name}, isCurrent: ${tour.isCurrent}, isClosed: ${tour.isClosed}, updatedAt: ${tour.updatedAt}")
-        } else {
-            android.util.Log.d("DashboardTrace", "DriverRepository.getCurrentTour EMIT: NULL")
-        }
-    }
+    override fun getCurrentTour(driverName: String): Flow<Tour?> = dao.getCurrentTour(driverName)
     override suspend fun setCurrentTour(tourId: Long) = dao.setCurrentTour(tourId)
 
     override suspend fun syncRemoteTours(driverName: String, remoteTours: List<com.example.driverassistant.data.api.TourWithStops>) {
-        android.util.Log.d("SyncDebug", "DriverRepository: Starting syncRemoteTours with ${remoteTours.size} tours")
-        if (remoteTours.isEmpty()) {
-            android.util.Log.d("SyncDebug", "DriverRepository: Remote tours list is empty, skipping.")
-            return
-        }
-        
         val localTours = dao.getAllToursWithDeleted(driverName)
-        android.util.Log.d("SyncDebug", "DriverRepository: Local tours in DB: ${localTours.size}")
-        
         for (remote in remoteTours) {
             val existing = localTours.find { it.uuid == remote.tour.uuid }
-            
-            // 1. Handle Tour Deletion
             if (remote.tour.deletedAt != null) {
-                if (existing != null) {
-                    android.util.Log.d("SyncDebug", "DriverRepository: DELETE Tour (Local ID: ${existing.id}, UUID: ${existing.uuid})")
-                    dao.deleteTour(existing)
-                } else {
-                    android.util.Log.d("SyncDebug", "DriverRepository: Remote tour is deleted but not found locally (UUID: ${remote.tour.uuid})")
-                }
+                if (existing != null) dao.deleteTour(existing)
                 continue
             }
-
             val remoteUpdatedAt = remote.tour.updatedAt ?: 0
             val localUpdatedAt = existing?.updatedAt ?: 0
-            
-            android.util.Log.d("SyncDebug", "Merge check: tour ${remote.tour.uuid} localUpdatedAt=$localUpdatedAt remoteUpdatedAt=$remoteUpdatedAt, localIsCurrent=${existing?.isCurrent} remoteIsCurrent=${remote.tour.isCurrent}")
-
-            // 2. Upsert Tour - Restore updatedAt check
             val tourId = if (existing != null) {
-                if (remoteUpdatedAt > localUpdatedAt) {
-                    android.util.Log.d("DashboardTrace", "DriverRepository: UPDATE Tour ID: ${existing.id}, UUID: ${remote.tour.uuid}, Name: ${remote.tour.name}, isCurrent: ${remote.tour.isCurrent}, isClosed: ${remote.tour.isClosed}, updatedAt: ${remote.tour.updatedAt}")
-                    dao.updateTour(remote.tour.copy(id = existing.id))
-                } else {
-                    android.util.Log.d("DashboardTrace", "DriverRepository: SKIP Tour Update ID: ${existing.id}, UUID: ${remote.tour.uuid}, localAt=$localUpdatedAt, remoteAt=$remoteUpdatedAt")
-                }
+                if (remoteUpdatedAt > localUpdatedAt) dao.updateTour(remote.tour.copy(id = existing.id))
                 existing.id
             } else {
-                android.util.Log.d("DashboardTrace", "DriverRepository: INSERT NEW Tour UUID: ${remote.tour.uuid}, Name: ${remote.tour.name}, isCurrent: ${remote.tour.isCurrent}, isClosed: ${remote.tour.isClosed}, updatedAt: ${remote.tour.updatedAt}")
                 dao.insertTour(remote.tour.copy(id = 0))
             }
-
-            // If this is the current tour, ensure no other tour is marked current for this driver
-            if (remote.tour.isCurrent) {
-                android.util.Log.d("SyncDebug", "DriverRepository: Tour ${remote.tour.uuid} is CURRENT, clearing others for ${remote.tour.driverName}")
-                dao.clearOtherCurrentTours(remote.tour.driverName, remote.tour.uuid, System.currentTimeMillis())
-            }
+            if (remote.tour.isCurrent) dao.clearOtherCurrentTours(remote.tour.driverName, remote.tour.uuid, System.currentTimeMillis())
             
-            // 3. Handle Stops
+            // Stops
             val localStops = dao.getStopsForTourWithDeleted(tourId)
-            android.util.Log.d("SyncDebug", "DriverRepository: Processing ${remote.stops.size} stops for Tour ID: $tourId. Local stops: ${localStops.size}")
             val remoteStopUuids = remote.stops.map { it.uuid }.toSet()
-            val newestLocalStopChange = localStops
-                .map { maxOf(it.updatedAt ?: 0L, it.deletedAt ?: 0L) }
-                .maxOrNull() ?: 0L
-            val newestLocalChange = maxOf(localUpdatedAt, newestLocalStopChange)
-            
             for (rStop in remote.stops) {
                 val existingStop = localStops.find { it.uuid == rStop.uuid }
-                
                 if (rStop.deletedAt != null) {
-                    if (existingStop != null) {
-                        android.util.Log.d("SyncDebug", "DriverRepository: DELETE Stop (Local ID: ${existingStop.id}, UUID: ${existingStop.uuid})")
-                        dao.deleteStop(existingStop)
-                    }
+                    if (existingStop != null) dao.deleteStop(existingStop)
                     continue
                 }
-
-                val remoteStopUpdatedAt = rStop.updatedAt ?: 0
-                val localStopUpdatedAt = existingStop?.updatedAt ?: 0
-                
+                val rStopUp = rStop.updatedAt ?: 0
+                val lStopUp = existingStop?.updatedAt ?: 0
                 if (existingStop != null) {
-                    if (remoteStopUpdatedAt > localStopUpdatedAt) {
-                        android.util.Log.d("SyncDebug", "DriverRepository: UPDATE Stop (Local ID: ${existingStop.id}, Remote: $remoteStopUpdatedAt > Local: $localStopUpdatedAt)")
-                        dao.updateStop(rStop.copy(id = existingStop.id, tourId = tourId))
-                    } else {
-                        // Log skip
-                        // android.util.Log.d("SyncDebug", "DriverRepository: SKIP Stop Update (Local ID: ${existingStop.id})")
-                    }
+                    if (rStopUp > lStopUp) dao.updateStop(rStop.copy(id = existingStop.id, tourId = tourId))
                 } else {
-                    android.util.Log.d("SyncDebug", "DriverRepository: INSERT NEW Stop (UUID: ${rStop.uuid})")
                     dao.insertStop(rStop.copy(id = 0, tourId = tourId))
                 }
             }
-
-            if (remoteUpdatedAt > newestLocalChange) {
-                localStops
-                    .filter { it.deletedAt == null && it.uuid !in remoteStopUuids }
-                    .forEach { staleStop ->
-                        android.util.Log.d("SyncDebug", "DriverRepository: MARK Stop deleted because it is absent remotely (Local ID: ${staleStop.id}, UUID: ${staleStop.uuid})")
-                        dao.updateStop(staleStop.copy(deletedAt = remoteUpdatedAt, updatedAt = remoteUpdatedAt))
-                    }
+            if (remoteUpdatedAt > localUpdatedAt) {
+                localStops.filter { it.deletedAt == null && it.uuid !in remoteStopUuids }.forEach {
+                    dao.updateStop(it.copy(deletedAt = remoteUpdatedAt, updatedAt = remoteUpdatedAt))
+                }
             }
-
-            // 4. Handle Cargo
-            if (remote.cargo != null) {
-                syncRemoteCargo(tourId, remote.cargo)
-            }
+            // Cargo
+            if (remote.cargo != null) syncRemoteCargo(tourId, remote.cargo)
         }
-        val finalTours = dao.getAllToursWithDeleted(driverName)
-        android.util.Log.d("SyncDebug", "Local tours after sync: ${finalTours.map { it.uuid to it.isCurrent }}")
-        android.util.Log.d("SyncDebug", "DriverRepository: syncRemoteTours completed")
     }
 
     override suspend fun updateStopStatus(stopId: Long, completed: Boolean, time: Long?) = dao.updateStopStatus(stopId, completed, time, System.currentTimeMillis())
@@ -271,71 +192,16 @@ class DriverRepositoryImpl @Inject constructor(
 
     override suspend fun syncProfile(name: String, email: String, phone: String, whatsapp: String, telegram: String, plate: String, photoUrl: String?, uuid: String?, profileUpdatedAt: Long): Long? {
         return try {
-            val response = backendApi.syncProfile(
-                com.example.driverassistant.data.api.ApiProfile(
-                    uuid = uuid,
-                    name = name,
-                    email = email,
-                    phone = phone,
-                    whatsapp = whatsapp,
-                    telegram = telegram,
-                    licensePlate = plate,
-                    photoUrl = photoUrl,
-                    profileUpdatedAt = profileUpdatedAt
-                )
-            )
+            val response = backendApi.syncProfile(com.example.driverassistant.data.api.ApiProfile(uuid, name, email, phone, whatsapp, telegram, plate, photoUrl, profileUpdatedAt))
             response.profileUpdatedAt
-        } catch (e: Exception) {
-            android.util.Log.e("DriverRepository", "Failed to sync profile", e)
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
-    override suspend fun getProfile(name: String): com.example.driverassistant.data.api.ApiProfileResponse? {
-        return try {
-            backendApi.getProfile(name)
-        } catch (e: Exception) {
-            android.util.Log.e("DriverRepository", "Failed to fetch profile", e)
-            null
-        }
-    }
-
-    override suspend fun activateDriver(code: String, deviceId: String, deviceName: String): com.example.driverassistant.data.api.ApiProfileResponse? {
-        return try {
-            backendApi.activateDriver(com.example.driverassistant.data.api.ActivateDriverRequest(code, deviceId, deviceName))
-        } catch (e: Exception) {
-            android.util.Log.e("DriverRepository", "Failed to activate driver", e)
-            null
-        }
-    }
-
-    override suspend fun unlinkDevice(uuid: String?, deviceId: String) {
-        try {
-            backendApi.unlinkDevice(com.example.driverassistant.data.api.UnlinkDeviceRequest(uuid, deviceId))
-        } catch (e: Exception) {
-            android.util.Log.e("DriverRepository", "Failed to unlink device", e)
-        }
-    }
-
-    override suspend fun getProfileByUuid(uuid: String): com.example.driverassistant.data.api.ApiProfileResponse? {
-        return try {
-            backendApi.getProfileByUuid(uuid)
-        } catch (e: Exception) {
-            android.util.Log.e("DriverRepository", "Failed to fetch profile by UUID", e)
-            null
-        }
-    }
-
-    override suspend fun uploadPhoto(driverName: String, base64: String, uuid: String?): com.example.driverassistant.data.api.PhotoUploadResponse? {
-        return try {
-            backendApi.uploadPhoto(
-                com.example.driverassistant.data.api.PhotoUploadRequest(driverName, base64, uuid)
-            )
-        } catch (e: Exception) {
-            android.util.Log.e("DriverRepository", "Failed to upload photo", e)
-            null
-        }
-    }
+    override suspend fun getProfile(name: String): com.example.driverassistant.data.api.ApiProfileResponse? = try { backendApi.getProfile(name) } catch (e: Exception) { null }
+    override suspend fun activateDriver(code: String, deviceId: String, deviceName: String): com.example.driverassistant.data.api.ApiProfileResponse? = try { backendApi.activateDriver(com.example.driverassistant.data.api.ActivateDriverRequest(code, deviceId, deviceName)) } catch (e: Exception) { null }
+    override suspend fun unlinkDevice(uuid: String?, deviceId: String) { try { backendApi.unlinkDevice(com.example.driverassistant.data.api.UnlinkDeviceRequest(uuid, deviceId)) } catch (e: Exception) { } }
+    override suspend fun getProfileByUuid(uuid: String): com.example.driverassistant.data.api.ApiProfileResponse? = try { backendApi.getProfileByUuid(uuid) } catch (e: Exception) { null }
+    override suspend fun uploadPhoto(driverName: String, base64: String, uuid: String?): com.example.driverassistant.data.api.PhotoUploadResponse? = try { backendApi.uploadPhoto(com.example.driverassistant.data.api.PhotoUploadRequest(driverName, base64, uuid)) } catch (e: Exception) { null }
 
     override suspend fun getMappingForCustomer(name: String): CustomerMapping? = dao.getMappingForCustomer(name)
     override suspend fun insertCustomerMapping(mapping: CustomerMapping) = dao.insertCustomerMapping(mapping)
@@ -343,7 +209,6 @@ class DriverRepositoryImpl @Inject constructor(
     override fun getAllMessages(driverName: String): Flow<List<ChatMessage>> = dao.getAllMessages(driverName)
     override suspend fun insertMessage(message: ChatMessage) = dao.insertMessage(message)
 
-    // Cargo Implementation
     override fun getCargoForTour(tourId: Long): Flow<List<Cargo>> = dao.getCargoForTour(tourId)
     override suspend fun getCargoForTourWithDeleted(tourId: Long): List<Cargo> = dao.getCargoForTourWithDeleted(tourId)
     override suspend fun insertCargo(cargo: Cargo): Long = dao.insertCargo(cargo)
@@ -358,26 +223,20 @@ class DriverRepositoryImpl @Inject constructor(
     override suspend fun syncRemoteCargo(tourId: Long, remoteCargo: List<Cargo>) {
         val localCargo = dao.getCargoForTourWithDeleted(tourId)
         val remoteByUuid = remoteCargo.associateBy { it.uuid }
-
         for (remote in remoteCargo) {
             val existing = localCargo.find { it.uuid == remote.uuid }
             if (remote.deletedAt != null) {
                 if (existing != null) dao.deleteCargoById(existing.id, remote.deletedAt)
                 continue
             }
-
             if (existing == null) {
                 dao.insertCargo(remote.copy(id = 0, tourId = tourId))
             } else if (remote.updatedAt > existing.updatedAt) {
                 dao.updateCargo(remote.copy(id = existing.id, tourId = tourId))
             }
         }
-        
-        // Deletions from remote if not in list
         if (remoteCargo.isNotEmpty()) {
-            localCargo.filter { it.deletedAt == null && it.uuid !in remoteByUuid }.forEach { 
-                dao.deleteCargoById(it.id, System.currentTimeMillis())
-            }
+            localCargo.filter { it.deletedAt == null && it.uuid !in remoteByUuid }.forEach { dao.deleteCargoById(it.id, System.currentTimeMillis()) }
         }
     }
 

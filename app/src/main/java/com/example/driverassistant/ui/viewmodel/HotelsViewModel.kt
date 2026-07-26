@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.driverassistant.data.api.BackendApi
+import com.example.driverassistant.data.api.HotelStatusRequest
 import com.example.driverassistant.domain.model.Hotel
+import com.example.driverassistant.domain.model.HotelEvent
 import com.example.driverassistant.domain.repository.DriverRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -26,76 +28,69 @@ class HotelsViewModel @Inject constructor(
         syncHotelsWithBackend()
     }
 
-    val hotels = combine(
-        repository.getAllHotels(driverName),
-        repository.getHotelStops(driverName)
-    ) { manualHotels, tourHotels ->
-        val mappedTourHotels = tourHotels.map { stop ->
-            Hotel(
-                id = -stop.id,
-                uuid = stop.uuid,
-                driverName = driverName,
-                name = stop.recipient.ifBlank { stop.addressFull.ifBlank { stop.address } },
-                address = stop.addressFull.ifBlank { stop.address },
-                roomNumber = stop.roomNumber,
-                entryCode = stop.entryCode,
-                bookingNumber = stop.bookingNumber,
-                phoneNumber = stop.phoneNumber,
-                email = stop.email,
-                notes = stop.notes,
-                timestamp = stop.arrivalTime ?: 0L
-            )
-        }
-        (manualHotels + mappedTourHotels).sortedByDescending { it.timestamp }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val hotels = repository.getAllHotels(driverName)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun addHotel(name: String, address: String, room: String, code: String, bookingNumber: String, phone: String, email: String, notes: String) {
-        viewModelScope.launch {
-            repository.insertHotel(
-                Hotel(
-                    driverName = driverName,
-                    name = name,
-                    address = address,
-                    roomNumber = room,
-                    entryCode = code,
-                    bookingNumber = bookingNumber,
-                    phoneNumber = phone,
-                    email = email,
-                    notes = notes,
-                    timestamp = System.currentTimeMillis()
-                )
-            )
-            syncHotelsWithBackend()
-        }
-    }
+    fun getHotelById(id: Long): Flow<Hotel?> = repository.getHotelById(id)
 
-    private fun syncHotelsWithBackend() {
+    fun syncHotelsWithBackend() {
         viewModelScope.launch {
             try {
-                // 1. PULL manual hotels
-                val remoteHotels = backendApi.getManualHotels(driverName)
-                val syncStartedAt = System.currentTimeMillis()
-                repository.syncRemoteHotels(driverName, remoteHotels, syncStartedAt)
+                // 1. Process offline events
+                val unsyncedEvents = repository.getUnsyncedHotelEvents()
+                for (event in unsyncedEvents) {
+                    try {
+                        val request = HotelStatusRequest(
+                            driverName = driverName,
+                            reason = event.reason,
+                            clientEventId = event.clientEventId,
+                            metadata = event.metadata
+                        )
+                        when (event.eventType) {
+                            "CHECKED_IN" -> backendApi.checkInHotel(event.hotelId, request)
+                            "CHECKED_OUT" -> backendApi.checkOutHotel(event.hotelId, request)
+                            "PROBLEM" -> backendApi.reportHotelProblem(event.hotelId, request)
+                            "CANCELLED" -> backendApi.cancelHotel(event.hotelId, request)
+                            "CONFIRMED" -> backendApi.confirmHotel(event.hotelId, request)
+                        }
+                        repository.markHotelEventSynced(event.id)
+                    } catch (e: Exception) {
+                        android.util.Log.e("SyncError", "Failed to sync hotel event ${event.id}", e)
+                    }
+                }
 
-                // 2. PUSH local manual hotels
-                val allHotels = repository.getAllHotelsSnapshot(driverName)
-                backendApi.syncHotels(allHotels)
+                // 2. Pull all hotels for driver
+                val remoteHotels = backendApi.getManualHotels(driverName) // Backend renamed or unified needed? 
+                // Let's assume backend returns all relevant hotels for driver
+                repository.syncRemoteHotels(driverName, remoteHotels, System.currentTimeMillis())
+
+                // 3. Pull tour hotels if there's a current tour
+                repository.getCurrentTour(driverName).first()?.let { tour ->
+                    val tourHotels = backendApi.getHotelsForTour(tour.id)
+                    repository.insertHotels(tourHotels)
+                }
+
             } catch (e: Exception) {
-                android.util.Log.e("SyncError", "Failed to sync hotels with backend", e)
+                android.util.Log.e("SyncError", "Failed to sync hotels", e)
             }
         }
     }
 
-    fun updateHotel(hotel: Hotel) {
+    fun transitionStatus(hotel: Hotel, toStatus: String, reason: String? = null) {
         viewModelScope.launch {
-            repository.updateHotel(hotel)
-            syncHotelsWithBackend()
-        }
-    }
-
-    fun deleteHotel(hotel: Hotel) {
-        viewModelScope.launch {
-            repository.deleteHotel(hotel)
+            val event = HotelEvent(
+                hotelId = hotel.id,
+                eventType = toStatus,
+                fromStatus = hotel.status,
+                toStatus = toStatus,
+                actorId = driverName,
+                reason = reason
+            )
+            repository.insertHotelEvent(event)
+            
+            // Optimistic local update
+            repository.updateHotel(hotel.copy(status = toStatus, updatedAt = System.currentTimeMillis()))
+            
             syncHotelsWithBackend()
         }
     }

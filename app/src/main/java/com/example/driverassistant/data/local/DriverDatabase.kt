@@ -14,6 +14,7 @@ import com.example.driverassistant.domain.model.*
         Document::class,
         Cost::class,
         Hotel::class,
+        HotelEvent::class,
         LocationData::class,
         WorkTime::class,
         SavedLocation::class,
@@ -22,13 +23,75 @@ import com.example.driverassistant.domain.model.*
         Cargo::class,
         CargoEvent::class
     ],
-    version = 26,
+    version = 27,
     exportSchema = false
 )
 abstract class DriverDatabase : RoomDatabase() {
     abstract val dao: DriverDao
 
     companion object {
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Expand Hotels table
+                db.execSQL("ALTER TABLE hotels ADD COLUMN public_id TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN tour_id INTEGER")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN stop_id INTEGER")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN driver_id INTEGER")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN address_line_1 TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN address_line_2 TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN postal_code TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN city TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN country TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN latitude REAL")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN longitude REAL")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN phone TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN booking_provider TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN check_in_date TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN check_in_time TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN check_out_date TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN check_out_time TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN number_of_nights INTEGER")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN number_of_rooms INTEGER")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN status TEXT NOT NULL DEFAULT 'PLANNED'")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN street_view_url TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN external_map_url TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN deleted_at INTEGER")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN contact_name TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN reservation_name TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN breakfast_included INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN parking_included INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN late_check_in INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN room_type TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN roomNumber TEXT")
+                db.execSQL("ALTER TABLE hotels ADD COLUMN entryCode TEXT")
+
+                // Migrate existing data if possible
+                db.execSQL("UPDATE hotels SET public_id = uuid, address_line_1 = address, created_at = timestamp, updated_at = timestamp")
+                db.execSQL("UPDATE hotels SET roomNumber = room_number, entryCode = entry_code")
+
+                // 2. Create Hotel Events table
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `hotel_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
+                        `hotel_id` INTEGER NOT NULL, 
+                        `event_type` TEXT NOT NULL, 
+                        `from_status` TEXT, 
+                        `to_status` TEXT, 
+                        `actor_type` TEXT NOT NULL, 
+                        `actor_id` TEXT NOT NULL, 
+                        `timestamp` INTEGER NOT NULL, 
+                        `reason` TEXT, 
+                        `client_event_id` TEXT NOT NULL, 
+                        `metadata` TEXT, 
+                        `is_synced` INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_hotel_events_client_event_id` ON `hotel_events` (`client_event_id`)")
+            }
+        }
+
         val MIGRATION_25_26 = object : Migration(25, 26) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("""
@@ -97,7 +160,6 @@ abstract class DriverDatabase : RoomDatabase() {
                 )
                 for (table in tables) {
                     db.execSQL("ALTER TABLE $table ADD COLUMN uuid TEXT NOT NULL DEFAULT ''")
-                    // Fill existing rows with RFC-4122 v4 compliant UUID strings
                     db.execSQL("""
                         UPDATE $table SET uuid = 
                         lower(hex(randomblob(4))) || '-' || 
@@ -118,7 +180,6 @@ abstract class DriverDatabase : RoomDatabase() {
                     "customer_mappings", "chat_messages"
                 )
                 for (table in tables) {
-                    // Fix any non-compliant UUIDs (e.g. from previous pseudo-UUID generation)
                     db.execSQL("""
                         UPDATE $table SET uuid = 
                         lower(hex(randomblob(4))) || '-' || 

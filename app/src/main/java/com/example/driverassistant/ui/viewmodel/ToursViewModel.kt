@@ -136,6 +136,10 @@ class ToursViewModel @Inject constructor(
         return repository.getStopsForTour(tourId)
     }
 
+    fun getHotelsForTour(tourId: Long): Flow<List<Hotel>> {
+        return repository.getHotelsForTour(tourId)
+    }
+
     fun addStop(
         tourId: Long,
         recipient: String,
@@ -193,18 +197,18 @@ class ToursViewModel @Inject constructor(
             repository.insertStop(
                 Stop(
                     tourId = tourId,
-                    address = hotel.address,
+                    address = hotel.addressLine1,
                     recipient = hotel.name,
-                    addressFull = hotel.address,
+                    addressFull = hotel.addressLine1,
                     contactName = hotel.name,
-                    phoneNumber = hotel.phoneNumber,
-                    email = hotel.email,
+                    phoneNumber = hotel.phone ?: "",
+                    email = hotel.email ?: "",
                     timeWindow = "",
                     notes = listOfNotNull(
-                        hotel.roomNumber.takeIf { it.isNotBlank() }?.let { "Szoba: $it" },
-                        hotel.entryCode.takeIf { it.isNotBlank() }?.let { "Kód: $it" },
-                        hotel.bookingNumber.takeIf { it.isNotBlank() }?.let { "Buchungsnummer: $it" },
-                        hotel.notes.takeIf { it.isNotBlank() }
+                        hotel.roomNumber?.takeIf { it.isNotBlank() }?.let { "Szoba: $it" },
+                        hotel.entryCode?.takeIf { it.isNotBlank() }?.let { "Kód: $it" },
+                        hotel.bookingNumber?.takeIf { it.isNotBlank() }?.let { "Buchungsnummer: $it" },
+                        hotel.notes?.takeIf { it.isNotBlank() }
                     ).joinToString(" | "),
                     stopType = "HOTEL",
                     orderIndex = newOrderIndex,

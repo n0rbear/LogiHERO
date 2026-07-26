@@ -15,11 +15,26 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
     const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
     const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
+    let nextHotel = null;
+    const nowTs = Date.now();
+
     for (let t of toursRes) {
         t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
         t.cargo = (await pool.query('SELECT * FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL', [t.id])).rows;
+
+        // Find next hotel for this driver
+        if (!nextHotel) {
+            const hRes = await pool.query(
+                `SELECT * FROM hotels
+                 WHERE tour_id = $1 AND deleted_at IS NULL
+                 AND status NOT IN ('CHECKED_OUT', 'CANCELLED')
+                 ORDER BY check_in_date ASC, check_in_time ASC LIMIT 1`,
+                [t.id]
+            );
+            if (hRes.rows[0]) nextHotel = hRes.rows[0];
+        }
     }
-    const hotelsRes = (await pool.query(`SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT 'stop'::TEXT as source, id::INT, uuid::TEXT, COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL) AND deleted_at IS NULL AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
+    const hotelsRes = (await pool.query(`SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, name::TEXT, address_line_1::TEXT as address, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone::TEXT as phone_number, email::TEXT, notes::TEXT, updated_at::BIGINT as timestamp, status::TEXT FROM hotels WHERE driver_name = $1 AND deleted_at IS NULL UNION ALL SELECT 'stop'::TEXT as source, id::INT, uuid::TEXT, COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp, stop_status::TEXT as status FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL) AND deleted_at IS NULL AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
     const currentTourObj = toursRes.find(t => t.is_current) || toursRes[0];
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
 
@@ -65,6 +80,14 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
         .msg { padding: 8px; margin: 5px 0; border-radius: 8px; max-width: 80%; }
         .msg-boss { background: #F57F17; color: black; align-self: flex-end; margin-left: auto; }
         .msg-driver { background: #34495e; color: white; }
+        .status-badge { font-size: 10px; padding: 2px 6px; border-radius: 8px; font-weight: bold; text-transform: uppercase; }
+        .status-planned { background: #444; color: #aaa; }
+        .status-booked { background: #1565c0; color: white; }
+        .status-confirmed { background: #2e7d32; color: white; }
+        .status-checked_in { background: #16884f; color: white; }
+        .status-checked_out { background: #222; color: #555; }
+        .status-cancelled { background: #c62828; color: white; }
+        .status-problem { background: #ef6c00; color: white; }
         input, select, textarea { width: 100%; padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }
         label { display: block; font-size: 11px; color: #aaa; margin-bottom: 2px; }
         #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
@@ -124,6 +147,15 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                             ${nextStopDetailsHtml}
                         </div>
                     </div>
+
+                    ${nextHotel ? `
+                        <div style="background:#16884f; padding:15px; border-radius:8px; margin-top:10px; cursor:pointer;" onclick="openTab(null, 'hotels')">
+                            <h4 style="margin:0; color:#fff;">🏨 Következő hotel:</h4>
+                            <b style="display:block; margin-top:5px; color:#fff;">${escapeHtml(nextHotel.name)}</b>
+                            <p style="margin:2px 0; font-size:13px; color:#ddd;">${escapeHtml(nextHotel.city || '')} | ${escapeHtml(nextHotel.check_in_date || '')}</p>
+                            <small style="color:#eee">Státusz: ${escapeHtml(nextHotel.status)}</small>
+                        </div>
+                    ` : ''}
 
                     ${update.depot_name ? `
                         <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: ${depotNameHtml}</p>
@@ -199,26 +231,10 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
         </div>
         <div id="hotels" class="tab-content">
             <div style="background:#222; padding:15px; border-radius:8px; margin-bottom:15px;">
-                <h3 style="margin-top:0;" id="hotelFormTitle">Új hotel</h3>
-                <input type="hidden" id="hotelSource">
-                <input type="hidden" id="hotelId">
-                <input type="hidden" id="hotelUuid">
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                    <div><label>Név</label><input type="text" id="hotelName"></div>
-                    <div><label>Cím</label><input type="text" id="hotelAddress"></div>
-                    <div><label>Szoba</label><input type="text" id="hotelRoom"></div>
-                    <div><label>Kód</label><input type="text" id="hotelCode"></div>
-                    <div><label>Buchungsnummer</label><input type="text" id="hotelBooking"></div>
-                    <div><label>Telefon</label><input type="text" id="hotelPhone"></div>
-                    <div><label>Email</label><input type="text" id="hotelEmail"></div>
-                    <div><label>Megjegyzés</label><input type="text" id="hotelNotes"></div>
-                </div>
-                <div style="display:flex; gap:10px; margin-top:10px;">
-                    <button onclick="saveWebHotel()" style="width:160px; background:#3498db; color:white;">Mentés</button>
-                    <button onclick="resetHotelForm()" style="width:120px;">Új adat</button>
-                </div>
+                <h3 style="margin-top:0;">Hotelek összesítő</h3>
+                <p style="color:#aaa; font-size:13px;">Új hotelt a <b>Túrák</b> fülön, a túra szerkesztésénél tudsz hozzáadni.</p>
             </div>
-            <table><thead><tr><th>ID / UUID</th><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th><th>Művelet</th></tr></thead><tbody id="hotels-list">${hotelsRes.map(h => `<tr><td><small style="color:#777;">#${h.id}<br>${(h.uuid || '').slice(0,8)}</small></td><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td><td><button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button> <button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="deleteHotelRecord(JSON.parse(this.dataset.hotel))" style="background:#e74c3c;color:white;">Törlés</button></td></tr>`).join('')}</tbody></table>
+            <table><thead><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Státusz</th><th>Foglalási szám</th><th>Művelet</th></tr></thead><tbody id="hotels-list"></tbody></table>
         </div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
@@ -1099,40 +1115,20 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
             }
 
             function renderHotelRow(h) {
-                const payload = esc(JSON.stringify(h || {}));
+                const statusHtml = '<span class="status-badge ' + getStatusClass(h.status) + '">' + esc(h.status || 'PLANNED') + '</span>';
                 return '<tr>' +
-                    '<td>' + new Date(Number(h.timestamp || Date.now())).toLocaleDateString() + '</td>' +
-                    '<td>' + esc(h.name || '') + '</td>' +
+                    '<td>' + (h.check_in_date || new Date(Number(h.timestamp || Date.now())).toLocaleDateString()) + '</td>' +
+                    '<td><b>' + esc(h.name || '') + '</b></td>' +
                     '<td>' + esc(h.address || '') + '</td>' +
                     '<td>' + esc(h.room_number || h.roomNumber || '') + '</td>' +
-                    '<td>' + esc(h.entry_code || h.entryCode || '') + '</td>' +
+                    '<td>' + statusHtml + '</td>' +
                     '<td>' + esc(h.booking_number || h.bookingNumber || '') + '</td>' +
-                    '<td><button data-hotel="' + payload + '" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button> ' +
-                    '<button data-hotel="' + payload + '" onclick="deleteHotelRecord(JSON.parse(this.dataset.hotel))" style="background:#e74c3c;color:white;">Törlés</button></td>' +
+                    '<td><button onclick="openTab(null, \\'tours\\')">Túrákhoz</button></td>' +
                 '</tr>';
             }
 
-            function resetHotelForm() {
-                document.getElementById('hotelFormTitle').innerText = 'Új hotel';
-                ['hotelSource', 'hotelId', 'hotelUuid', 'hotelName', 'hotelAddress', 'hotelRoom', 'hotelCode', 'hotelBooking', 'hotelPhone', 'hotelEmail', 'hotelNotes'].forEach(id => {
-                    document.getElementById(id).value = '';
-                });
-            }
-
-            function editHotelRecord(h) {
-                document.getElementById('hotelFormTitle').innerText = h.source === 'stop' ? 'Túrához tartozó hotel szerkesztése' : 'Hotel szerkesztése';
-                document.getElementById('hotelSource').value = h.source || 'hotel';
-                document.getElementById('hotelId').value = h.id || '';
-                document.getElementById('hotelUuid').value = h.uuid || '';
-                document.getElementById('hotelName').value = h.name || '';
-                document.getElementById('hotelAddress').value = h.address || '';
-                document.getElementById('hotelRoom').value = h.room_number || h.roomNumber || '';
-                document.getElementById('hotelCode').value = h.entry_code || h.entryCode || '';
-                document.getElementById('hotelBooking').value = h.booking_number || h.bookingNumber || '';
-                document.getElementById('hotelPhone').value = h.phone_number || h.phoneNumber || '';
-                document.getElementById('hotelEmail').value = h.email || '';
-                document.getElementById('hotelNotes').value = h.notes || '';
-                document.getElementById('hotelName').focus();
+            function getStatusClass(s) {
+                return 'status-' + (s || 'planned').toLowerCase();
             }
 
             async function refreshHotels() {
@@ -1144,48 +1140,6 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     if (list) list.innerHTML = data.map(renderHotelRow).join('');
                 } catch (e) {
                     console.error('Refresh hotels error:', e);
-                }
-            }
-
-            async function saveWebHotel() {
-                const name = document.getElementById('hotelName').value.trim();
-                if (!name) {
-                    showToast('Adj meg hotel nevet.');
-                    return;
-                }
-                const payload = {
-                    source: document.getElementById('hotelSource').value || 'hotel',
-                    id: document.getElementById('hotelId').value || null,
-                    uuid: document.getElementById('hotelUuid').value || null,
-                    driverName: DRIVER_NAME,
-                    name,
-                    address: document.getElementById('hotelAddress').value || '',
-                    roomNumber: document.getElementById('hotelRoom').value || '',
-                    entryCode: document.getElementById('hotelCode').value || '',
-                    bookingNumber: document.getElementById('hotelBooking').value || '',
-                    phoneNumber: document.getElementById('hotelPhone').value || '',
-                    email: document.getElementById('hotelEmail').value || '',
-                    notes: document.getElementById('hotelNotes').value || '',
-                    timestamp: Date.now()
-                };
-                try {
-                    const r = await adminFetch('/admin/save-hotel-record', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(payload)
-                    });
-                    if (!r.ok) {
-                        const errorText = await r.text().catch(() => '');
-                        showToast('Nem sikerült menteni a hotelt: ' + (errorText || r.status));
-                        return;
-                    }
-                    const saved = await r.json();
-                    resetHotelForm();
-                    refreshHotels();
-                    showToast('Hotel mentve.');
-                } catch (e) {
-                    console.error('Save hotel error:', e);
-                    showToast('Hiba a hotel mentésekor.');
                 }
             }
 
@@ -1572,7 +1526,10 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     booking_number: src.booking_number || src.bookingNumber || '',
                     latitude: src.latitude || '',
                     longitude: src.longitude || '',
-                    items: src.items || null
+                    items: src.items || null,
+                    check_in_date: src.check_in_date || '',
+                    check_out_date: src.check_out_date || '',
+                    status: src.status || src.stop_status || 'PLANNED'
                 };
                 if ((!n.street || !n.city) && n.address_full) {
                     const match = String(n.address_full).match(/^(.+?)\s+([^,\s]+)\s*,\s*(\d{4,6})\s+(.+)$/);
@@ -1631,9 +1588,14 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                     '<div class="stop-hotel-fields" style="display:none; margin-top:10px; padding:10px; background:#2b2b2b; border-radius:6px;">' +
                         '<b style="display:block; margin-bottom:8px; color:#3498db;">Hotel adatok</b>' +
                         '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">' +
+                            '<div><label>Check-in dátum</label><input type="date" class="stop-hotel-check-in-date" value="' + esc(s.check_in_date || '') + '"></div>' +
+                            '<div><label>Check-out dátum</label><input type="date" class="stop-hotel-check-out-date" value="' + esc(s.check_out_date || '') + '"></div>' +
+                            '<div><label>Státusz</label><select class="stop-hotel-status"><option value="PLANNED" '+(s.status==='PLANNED'?'selected':'')+'>PLANNED</option><option value="BOOKED" '+(s.status==='BOOKED'?'selected':'')+'>BOOKED</option><option value="CONFIRMED" '+(s.status==='CONFIRMED'?'selected':'')+'>CONFIRMED</option><option value="PROBLEM" '+(s.status==='PROBLEM'?'selected':'')+'>PROBLEM</option></select></div>' +
+                        '</div>' +
+                        '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:8px;">' +
                             '<div><label>Szoba</label><input type="text" class="stop-room" value="' + esc(mainItem.room_number || s.room_number || '') + '"></div>' +
                             '<div><label>Belépőkód</label><input type="text" class="stop-entry-code" value="' + esc(mainItem.entry_code || s.entry_code || '') + '"></div>' +
-                            '<div><label>Buchungsnummer</label><input type="text" class="stop-booking" value="' + esc(mainItem.booking_number || s.booking_number || '') + '"></div>' +
+                            '<div><label>Foglalási szám</label><input type="text" class="stop-booking" value="' + esc(mainItem.booking_number || s.booking_number || '') + '"></div>' +
                         '</div>' +
                         '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px;">' +
                             '<div><label>Telefon</label><input type="text" class="stop-phone" value="' + esc(mainItem.phone_number || s.phone_number || '') + '"></div>' +
@@ -1715,6 +1677,9 @@ driverDashboardRoutes.get('/driver/:name', async (req, res) => {
                         time_window: r.querySelector('.stop-time-window')?.value || '',
                         stop_date: dateInputToTimestamp(r.querySelector('.stop-date')?.value || ''),
                         stop_type: r.querySelector('.stop-type').value,
+                        check_in_date: r.querySelector('.stop-hotel-check-in-date')?.value || null,
+                        check_out_date: r.querySelector('.stop-hotel-check-out-date')?.value || null,
+                        status: r.querySelector('.stop-hotel-status')?.value || 'PLANNED',
                         room_number: r.querySelector('.stop-room')?.value || '',
                         entry_code: r.querySelector('.stop-entry-code')?.value || '',
                         booking_number: r.querySelector('.stop-booking')?.value || '',
