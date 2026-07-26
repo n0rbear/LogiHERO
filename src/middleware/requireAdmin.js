@@ -22,6 +22,7 @@ const wantsJson = (req) => {
 };
 
 const isUnsafeMethod = (method) => !['GET', 'HEAD', 'OPTIONS'].includes(method);
+const isSessionLogout = (req) => req.originalUrl === '/admin/logout';
 
 const requireAdmin = (req, res, next) => {
     // 1. Check if ADMIN_TOKEN is configured
@@ -85,7 +86,7 @@ const requireAdmin = (req, res, next) => {
         req.adminSession = session;
         req.adminCsrfToken = session.csrfToken;
         req.adminRole = session.role || 'FULL_ADMIN';
-        if (req.adminRole === 'READ_ONLY' && isUnsafeMethod(req.method)) {
+        if (req.adminRole === 'READ_ONLY' && isUnsafeMethod(req.method) && !isSessionLogout(req)) {
             console.log(`[ADMIN_AUTH] requestId=${req.requestId || 'unknown'} actor=admin role=READ_ONLY action=write_denied result=403`);
             return res.status(403).json({ error: 'Read-only admin cannot perform write actions.' });
         }

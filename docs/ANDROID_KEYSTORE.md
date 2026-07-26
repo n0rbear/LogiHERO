@@ -18,6 +18,7 @@ The app migrates once at startup and during profile activation:
 5. Remove the legacy plain token only after verification.
 
 The Retrofit interceptor reads the token only through `DeviceCredentialStore`. It redacts `x-device-token` and `authorization` in OkHttp logging.
+Sprint H also redacts `cookie` and `set-cookie`, and instrumented tests verify actual log output does not contain the raw token.
 
 Credential states used by the app/backend contract:
 

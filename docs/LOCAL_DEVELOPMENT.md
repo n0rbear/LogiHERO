@@ -115,6 +115,15 @@ Run Android connected tests on Windows:
 
 The helper finds the Android SDK, starts an existing AVD or creates `LogiHERO_API_35` with API 35 Google APIs x86_64 when command-line tools are available, waits for `sys.boot_completed=1`, then runs `connectedAndroidTest`.
 
+Full Windows example:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/android-connected-test.ps1 `
+  -AvdName NDP_E2E_API_36 `
+  -GradleTask connectedAndroidTest `
+  -LogFile build\android-connected-test.log
+```
+
 ## Production Build Metadata
 
 The `/version` and `/health/version` endpoints expose only safe metadata:

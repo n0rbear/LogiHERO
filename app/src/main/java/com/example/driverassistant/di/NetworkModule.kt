@@ -31,6 +31,8 @@ object NetworkModule {
             level = HttpLoggingInterceptor.Level.BASIC
             redactHeader("x-device-token")
             redactHeader("authorization")
+            redactHeader("cookie")
+            redactHeader("set-cookie")
         }
         return OkHttpClient.Builder()
             .addInterceptor { chain ->

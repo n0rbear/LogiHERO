@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 process.env.NODE_ENV = process.env.NODE_ENV || 'development';
 process.env.PORT = process.env.PORT || '3100';
 process.env.ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'local-dev-admin-token';
+process.env.READ_ONLY_ADMIN_TOKEN = process.env.READ_ONLY_ADMIN_TOKEN || 'local-dev-read-only-token';
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://logihero_dev:logihero_dev_password@127.0.0.1:5432/logihero_dev';
 process.env.APP_COMMIT_SHA = process.env.APP_COMMIT_SHA || 'local';
 process.env.APP_BUILD_TIME = process.env.APP_BUILD_TIME || new Date().toISOString();

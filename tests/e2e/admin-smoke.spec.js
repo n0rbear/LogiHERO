@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'local-dev-admin-token';
+const READ_ONLY_ADMIN_TOKEN = process.env.READ_ONLY_ADMIN_TOKEN || 'local-dev-read-only-token';
 
 test.beforeEach(async ({ page }) => {
     const failures = [];
@@ -37,6 +38,13 @@ async function login(page) {
     await page.locator('#loginForm button[type="submit"]').click();
     await expect(page).toHaveURL(/\/admin/);
     await expect(page.getByRole('heading', { name: /Dashboard/i })).toBeVisible();
+}
+
+async function readOnlyLogin(page) {
+    await page.goto('/admin/login');
+    await page.locator('#token').fill(READ_ONLY_ADMIN_TOKEN);
+    await page.locator('#loginForm button[type="submit"]').click();
+    await expect(page).toHaveURL(/\/admin/);
 }
 
 test('admin production flow works in real Chromium', async ({ page }) => {
@@ -122,6 +130,26 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await expect(page.locator('#tours-list-container')).toContainText('LogiHERO Dev');
     await page.locator('#tours-list-container .tour-item').first().click();
     await expect(page.locator('#tour-details-card')).toBeVisible();
+
+    await page.getByRole('button', { name: /Kijelentkez/i }).click();
+    await expect(page).toHaveURL(/\/admin\/login/);
+});
+
+test('read-only admin cannot write in real Chromium', async ({ page }) => {
+    await readOnlyLogin(page);
+
+    for (const path of ['/admin', '/admin/drivers', '/admin/hotels', '/admin/tours', '/admin/work-time', '/admin/work-time/weekly']) {
+        await page.goto(path);
+        await expect(page.locator('body')).not.toContainText('Internal Server Error');
+    }
+
+    const denied = await page.request.post('/admin/work-time/bulk/approve', {
+        data: { days: [] }
+    });
+    expect(denied.status()).toBe(403);
+
+    await page.goto('/admin/drivers');
+    await expect(page.locator('body')).not.toContainText('rotate-token');
 
     await page.getByRole('button', { name: /Kijelentkez/i }).click();
     await expect(page).toHaveURL(/\/admin\/login/);

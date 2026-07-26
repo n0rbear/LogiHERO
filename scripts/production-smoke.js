@@ -30,6 +30,10 @@ function assert(condition, message) {
     if (!condition) throw new Error(message);
 }
 
+function statusLine(status, message) {
+    console.log(`[SMOKE] status=${status} ${message}`);
+}
+
 (async () => {
     let authenticated = false;
     const health = await request('/health');
@@ -64,17 +68,17 @@ function assert(condition, message) {
         });
         assert(denied.status === 403, 'read-only write attempt must be 403');
     } else {
-        console.log('[SMOKE] PARTIAL: PRODUCTION_SMOKE_ADMIN_TOKEN not set; authenticated read-only checks skipped.');
+        statusLine('BLOCKED_MISSING_CREDENTIAL', 'PRODUCTION_SMOKE_ADMIN_TOKEN not set; authenticated read-only checks skipped.');
     }
 
     const syncVersion = await request('/api/sync/version');
     assert(syncVersion.status === 200, '/api/sync/version must be 200');
     if (!authenticated && process.env.SMOKE_ALLOW_PARTIAL !== 'true') {
-        console.log('[SMOKE] PARTIAL production smoke completed; set PRODUCTION_SMOKE_ADMIN_TOKEN for authenticated validation.');
+        statusLine('BLOCKED_MISSING_CREDENTIAL', 'public checks completed; set PRODUCTION_SMOKE_ADMIN_TOKEN for authenticated validation.');
         process.exit(2);
     }
-    console.log(authenticated ? '[SMOKE] production authenticated read-only smoke passed' : '[SMOKE] production partial smoke passed');
+    statusLine(authenticated ? 'FULL_PASS' : 'PARTIAL_PUBLIC_ONLY', authenticated ? 'production authenticated read-only smoke passed' : 'production partial public-only smoke passed');
 })().catch((error) => {
-    console.error('[SMOKE] failed:', error.message);
+    console.error('[SMOKE] status=FAILED', error.message);
     process.exit(1);
 });

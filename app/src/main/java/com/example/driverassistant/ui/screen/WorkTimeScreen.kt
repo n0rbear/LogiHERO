@@ -1,10 +1,24 @@
 package com.example.driverassistant.ui.screen
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -27,6 +41,30 @@ fun WorkTimeScreen(viewModel: DashboardViewModel = hiltViewModel()) {
             kotlinx.coroutines.delay(1000)
         }
     }
+
+    WorkTimeScreenContent(
+        workTimes = workTimes,
+        ongoing = ongoing,
+        serverConflicts = serverConflicts,
+        now = now,
+        onStatusChange = viewModel::updateStatus,
+        onAcceptServer = viewModel::acceptServerConflict,
+        onReapplyLocal = viewModel::reapplyLocalConflict,
+        onDefer = viewModel::deferConflict
+    )
+}
+
+@Composable
+fun WorkTimeScreenContent(
+    workTimes: List<WorkTime>,
+    ongoing: WorkTime?,
+    serverConflicts: List<WorkTimeConflictDto>,
+    now: Long,
+    onStatusChange: (String) -> Unit,
+    onAcceptServer: (String) -> Unit,
+    onReapplyLocal: (String) -> Unit,
+    onDefer: (String) -> Unit
+) {
     val pending = workTimes.count { it.syncState != "SYNCED" }
     val conflicts = workTimes.count { it.syncState == "CONFLICT" } + serverConflicts.count { it.resolutionStatus == "UNRESOLVED" }
     val approval = workTimes.firstOrNull { it.approvalStatus != "PENDING" }?.approvalStatus ?: "PENDING"
@@ -38,55 +76,55 @@ fun WorkTimeScreen(viewModel: DashboardViewModel = hiltViewModel()) {
         item {
             ElevatedCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Munkaidő", style = MaterialTheme.typography.headlineSmall)
-                    Text("Aktuális státusz: ${displayStatus(ongoing)}", style = MaterialTheme.typography.titleMedium)
-                    Text("Aktuális státusz ideje: ${durationText((ongoing?.startTime ?: now).let { now - it })}")
-                    Text("Munkanap kezdete: ${ongoing?.startTime?.let(::timeText) ?: "-"}")
-                    Text("Pending sync: $pending · Konfliktus: $conflicts · Jóváhagyás: $approval")
+                    Text("Work Time", style = MaterialTheme.typography.headlineSmall)
+                    Text("Current status: ${displayStatus(ongoing)}", style = MaterialTheme.typography.titleMedium)
+                    Text("Current status duration: ${durationText((ongoing?.startTime ?: now).let { now - it })}")
+                    Text("Work day start: ${ongoing?.startTime?.let(::timeText) ?: "-"}")
+                    Text("Pending sync: $pending | Conflicts: $conflicts | Approval: $approval")
                     if (conflicts > 0) {
-                        Text("Konfliktus kezelése: nézd át a szerver és helyi változatot, majd fogadd el a szerverváltozatot vagy küldd újra a helyit új revision alapján.", color = MaterialTheme.colorScheme.error)
+                        Text("Conflict review required. Compare local and server values before accepting server, reapplying local, or deferring.", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
         }
-        item {
-            SummaryGrid(workTimes, now)
-        }
+        item { SummaryGrid(workTimes, now) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BigStatusButton("Work", Modifier.weight(1f)) { viewModel.updateStatus("WORK") }
-                    BigStatusButton("Driving", Modifier.weight(1f)) { viewModel.updateStatus("DRIVING") }
+                    BigStatusButton("Work", Modifier.weight(1f)) { onStatusChange("WORK") }
+                    BigStatusButton("Driving", Modifier.weight(1f)) { onStatusChange("DRIVING") }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BigStatusButton("Break", Modifier.weight(1f)) { viewModel.updateStatus("BREAK") }
-                    BigStatusButton("Rest", Modifier.weight(1f)) { viewModel.updateStatus("REST") }
+                    BigStatusButton("Break", Modifier.weight(1f)) { onStatusChange("BREAK") }
+                    BigStatusButton("Rest", Modifier.weight(1f)) { onStatusChange("REST") }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BigStatusButton("Availability", Modifier.weight(1f)) { viewModel.updateStatus("AVAILABILITY") }
-                    OutlinedButton(onClick = { viewModel.updateStatus("OFFLINE") }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Nap lezárása") }
+                    BigStatusButton("Availability", Modifier.weight(1f)) { onStatusChange("AVAILABILITY") }
+                    OutlinedButton(onClick = { onStatusChange("OFFLINE") }, modifier = Modifier.weight(1f).height(56.dp)) {
+                        Text("End day")
+                    }
                 }
             }
         }
-        item { Text("Napi timeline", style = MaterialTheme.typography.titleMedium) }
+        item { Text("Daily timeline", style = MaterialTheme.typography.titleMedium) }
         items(workTimes.sortedBy { it.startTime }) { entry ->
             ElevatedCard {
                 Column(Modifier.padding(12.dp)) {
-                    Text("${entry.status} · ${timeText(entry.startTime)} - ${entry.endTime?.let(::timeText) ?: "nyitott"}")
-                    Text("Időtartam: ${durationText((entry.endTime ?: now) - entry.startTime)} · Sync: ${entry.syncState}")
-                    if (entry.manualEdit) Text("Admin/manual korrekció", color = MaterialTheme.colorScheme.error)
-                    if (entry.correctionReason != null) Text("Indok: ${entry.correctionReason}")
+                    Text("${entry.status} | ${timeText(entry.startTime)} - ${entry.endTime?.let(::timeText) ?: "open"}")
+                    Text("Duration: ${durationText((entry.endTime ?: now) - entry.startTime)} | Sync: ${entry.syncState}")
+                    if (entry.manualEdit) Text("Admin/manual correction", color = MaterialTheme.colorScheme.error)
+                    if (entry.correctionReason != null) Text("Reason: ${entry.correctionReason}")
                 }
             }
         }
         if (serverConflicts.isNotEmpty()) {
-            item { Text("Konfliktusok", style = MaterialTheme.typography.titleMedium) }
+            item { Text("Conflicts", style = MaterialTheme.typography.titleMedium) }
             items(serverConflicts, key = { it.uuid }) { conflict ->
                 ConflictCard(
                     conflict = conflict,
-                    onAcceptServer = { viewModel.acceptServerConflict(conflict.uuid) },
-                    onReapplyLocal = { viewModel.reapplyLocalConflict(conflict.uuid) },
-                    onDefer = { viewModel.deferConflict(conflict.uuid) }
+                    onAcceptServer = { onAcceptServer(conflict.uuid) },
+                    onReapplyLocal = { onReapplyLocal(conflict.uuid) },
+                    onDefer = { onDefer(conflict.uuid) }
                 )
             }
         }
@@ -94,35 +132,36 @@ fun WorkTimeScreen(viewModel: DashboardViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun ConflictCard(
+fun ConflictCard(
     conflict: WorkTimeConflictDto,
     onAcceptServer: () -> Unit,
     onReapplyLocal: () -> Unit,
     onDefer: () -> Unit
 ) {
-    val manualReview = conflict.approvalStatus == "APPROVED" || conflict.adminCorrection || conflict.reason.contains("SOFT_DELETED")
+    val manualReview = conflict.approvalStatus == "APPROVED" ||
+        conflict.adminCorrection ||
+        conflict.reason.contains("SOFT_DELETED") ||
+        conflict.reason.contains("OVERLAP")
     ElevatedCard {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("UUID: ${conflict.uuid}", style = MaterialTheme.typography.labelLarge)
-            Text("Allapot: ${conflict.resolutionStatus} · Ok: ${conflict.reason}")
-            Text("Nap: ${conflict.workDayUuid ?: "-"} · Entry: ${conflict.entryUuid ?: "-"}")
-            Text("Helyi revision: ${conflict.localRevision ?: "-"} · Backend revision: ${conflict.backendRevision ?: "-"}")
-            Text("Approval: ${conflict.approvalStatus ?: "-"} · Admin correction: ${if (conflict.adminCorrection) "igen" else "nem"}")
-            Text("Letrehozva: ${conflict.createdAt?.let(::timeText) ?: "-"}")
-            Text("Helyi: ${conflict.localValue?.toString() ?: "-"}")
-            Text("Backend: ${conflict.backendValue?.toString() ?: "-"}")
-            if (manualReview) {
-                Text("Manual admin review szukseges.", color = MaterialTheme.colorScheme.error)
-            }
+            Text("Status: ${conflict.resolutionStatus} | Reason: ${conflict.reason}")
+            Text("Day: ${conflict.workDayUuid ?: "-"} | Entry: ${conflict.entryUuid ?: "-"}")
+            Text("Local revision: ${conflict.localRevision ?: "-"} | Backend revision: ${conflict.backendRevision ?: "-"}")
+            Text("Approval: ${conflict.approvalStatus ?: "-"} | Admin correction: ${if (conflict.adminCorrection) "yes" else "no"}")
+            Text("Created: ${conflict.createdAt?.let(::timeText) ?: "-"}")
+            Text("Local value: ${friendlyValue(conflict.localValue)}")
+            Text("Server value: ${friendlyValue(conflict.backendValue)}")
+            if (manualReview) Text("Manual admin review required.", color = MaterialTheme.colorScheme.error)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onAcceptServer, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED") {
-                    Text("Szerver")
+                    Text("Server")
                 }
                 OutlinedButton(onClick = onReapplyLocal, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED" && !manualReview) {
-                    Text("Helyi ujra")
+                    Text("Reapply")
                 }
                 OutlinedButton(onClick = onDefer, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED") {
-                    Text("Kesobb")
+                    Text("Later")
                 }
             }
         }
@@ -145,6 +184,14 @@ private fun SummaryGrid(workTimes: List<WorkTime>, now: Long) {
 @Composable
 private fun BigStatusButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(onClick = onClick, modifier = modifier.height(56.dp)) { Text(label) }
+}
+
+private fun friendlyValue(value: Map<String, Any?>?): String {
+    if (value.isNullOrEmpty()) return "-"
+    return listOf("date", "work_date", "status", "approval_status", "revision")
+        .mapNotNull { key -> value[key]?.let { "$key=$it" } }
+        .ifEmpty { value.entries.take(3).map { "${it.key}=${it.value}" } }
+        .joinToString(", ")
 }
 
 private fun displayStatus(workTime: WorkTime?): String = workTime?.status ?: "OFFLINE"
