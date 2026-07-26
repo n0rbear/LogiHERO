@@ -1,11 +1,6 @@
-# Tasks - Fix Production Blocking Syntax Errors
+# Tasks - Fix `company_uuid` Missing Column Error
 
-- `[x]` Fix nested template literals in `addCargoRow()`
-- `[x]` Remove duplicated code and fix braces in `addStopRow()`
-- `[x]` Run syntax checks (`node --check`)
-- `[x]` Run `npm run typecheck`
-- `[ ]` Run `npm test` (Failed due to DB connection, but verified code syntax)
-- `[ ]` Verify local startup (`npm start`) (Failed due to DB connection, but verified code syntax)
-- `[ ]` Manual verification of Tour editor functionality (Simulated)
+- `[ ]` Update `src/database/init.js` with schema-aware column checks and better logging
+- `[ ]` Verify syntax with `node --check`
 - `[ ]` Commit and push changes
-- `[ ]` Verify production deployment
+- `[ ]` Monitor production deployment and verify health

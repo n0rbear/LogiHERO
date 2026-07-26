@@ -256,10 +256,9 @@ const initDb = async () => {
         ['driver_devices', 'last_seen_at', 'BIGINT']
     ];
     for (const [t, c, type] of cols) {
-        if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
-        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
+        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2", [t, c]);
         if (check.rows.length === 0) {
-            if (t === 'stops' && c === 'items') console.log('[SCHEMA] adding items column');
+            console.log(`[SCHEMA] adding column ${c} to table ${t}`);
             await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
         }
     }
@@ -311,13 +310,14 @@ const initDb = async () => {
         ['drivers', 'created_at', 'BIGINT']
     ];
     for (const [t, c, type] of driverCols) {
-        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
+        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2", [t, c]);
         if (check.rows.length === 0) {
+            console.log(`[SCHEMA] adding column ${c} to table ${t}`);
             await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
         }
     }
 
-    const verifyItems = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='stops' AND column_name='items'");
+    const verifyItems = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name='stops' AND column_name='items'");
     if (verifyItems.rows.length === 0) throw new Error("FATAL: Schema migration failed - column 'items' still does not exist in table 'stops'.");
     console.log('[SCHEMA] items column exists');
     const constraints = [['work_times', 'unique_worktime', 'UNIQUE (driver_name, start_time)'], ['costs', 'unique_cost', 'UNIQUE (driver_name, timestamp, amount)'], ['hotels', 'unique_hotel', 'UNIQUE (driver_name, timestamp, name)']];
