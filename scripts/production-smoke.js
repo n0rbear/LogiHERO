@@ -34,6 +34,21 @@ function statusLine(status, message) {
     console.log(`[SMOKE] status=${status} ${message}`);
 }
 
+function readOnlyWriteButtons(body) {
+    const matches = String(body).match(/<button\b[\s\S]*?<\/button>/gi) || [];
+    return matches.filter((button) => {
+        const text = button.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        const normalized = `${button} ${text}`
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+        if (/logout|kijelentkezes|close|bezar|megnyitas|szures|google maps|osszes sofor|adatlap|menu-toggle|sidebar-open/.test(normalized)) {
+            return false;
+        }
+        return /mentes|mentese|modositas|torol|deaktivalas|uj kod|regenerate|rotate-token|jovahagy|elutasit|korrekcio/.test(normalized);
+    });
+}
+
 (async () => {
     let authenticated = false;
     const health = await request('/health');
@@ -71,7 +86,7 @@ function statusLine(status, message) {
             assert(response.status === 200, `${path} read-only bearer access must be 200`);
             assert(!response.body.includes('Internal Server Error'), `${path} must not return 500 body`);
             assert(!response.body.includes('Error:'), `${path} must not expose stack traces`);
-            assert(!String(response.body).match(/<button[^>]*(Ment|Torol|Jovahagy|Elutasit)/i), `${path} read-only UI must not expose active write buttons`);
+            assert(readOnlyWriteButtons(response.body).length === 0, `${path} read-only UI must not expose active write buttons`);
             assert(!String(response.body).includes('rotate-device-token'), `${path} must not expose token rotation button`);
             assert(String(response.headers['cache-control'] || '').includes('no-store'), `${path} must be no-store`);
             assert(!response.headers['x-powered-by'], `${path} x-powered-by must be absent`);

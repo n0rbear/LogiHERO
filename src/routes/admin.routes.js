@@ -288,7 +288,7 @@ adminRoutes.get(['/', '/dashboard'], requireAdmin, async (req, res) => {
                 </div>
             </div>
         `;
-        res.send(renderAdminLayout({ title: 'Dashboard', content, activeMenu: 'dashboard', csrfToken: req.adminCsrfToken }));
+        res.send(renderAdminLayout({ title: 'Dashboard', content, activeMenu: 'dashboard', csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -359,13 +359,22 @@ adminRoutes.get('/drivers', requireAdmin, async (req, res) => {
                 }
             </script>
         `;
-        res.send(renderAdminLayout({ title: 'Sofőrök', content, activeMenu: 'drivers', scripts, csrfToken: req.adminCsrfToken }));
+        res.send(renderAdminLayout({ title: 'Sofőrök', content, activeMenu: 'drivers', scripts, csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
     } catch (e) { res.status(500).send(e.message); }
 });
 
 adminRoutes.get('/drivers/new', requireAdmin, (req, res) => {
+    if (req.adminRole === 'READ_ONLY') {
+        return res.status(403).send(renderAdminLayout({
+            title: 'Read-only',
+            content: '<div class="card">Read-only admin fiokkal nem hozhato letre uj sofor.</div>',
+            activeMenu: 'drivers',
+            csrfToken: req.adminCsrfToken,
+            adminRole: req.adminRole
+        }));
+    }
     const content = renderDriverForm({ mode: 'new', csrfToken: req.adminCsrfToken });
-    res.send(renderAdminLayout({ title: 'Új sofőr', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken }));
+    res.send(renderAdminLayout({ title: 'Új sofőr', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
 });
 
 adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
@@ -373,6 +382,7 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
         title: 'Hibás sofőr azonosító',
         activeMenu: 'drivers',
         csrfToken: req.adminCsrfToken,
+        adminRole: req.adminRole,
         content: '<div class="card">Hibás sofőr UUID.</div>'
     }));
     try {
@@ -381,6 +391,7 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
             title: 'Sofőr nem található',
             activeMenu: 'drivers',
             csrfToken: req.adminCsrfToken,
+            adminRole: req.adminRole,
             content: '<div class="card">Sofőr nem található.</div>'
         }));
         const tours = (await pool.query('SELECT id, name, tour_status, date, is_current FROM tours WHERE driver_uuid = $1 OR driver_name = $2 ORDER BY date DESC LIMIT 8', [driver.uuid, driver.name])).rows;
@@ -479,7 +490,7 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                 }
             </script>
         `;
-        res.send(renderAdminLayout({ title: 'Sofőradatlap', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken }));
+        res.send(renderAdminLayout({ title: 'Sofőradatlap', content, activeMenu: 'drivers', csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -670,7 +681,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                 renderHotels();
             </script>
         `;
-        res.send(renderAdminLayout({ title: 'Hotelek', content, activeMenu: 'hotels', styles, scripts, csrfToken: req.adminCsrfToken }));
+        res.send(renderAdminLayout({ title: 'Hotelek', content, activeMenu: 'hotels', styles, scripts, csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -698,7 +709,7 @@ placeholders.forEach(p => {
     adminRoutes.get('/' + p, requireAdmin, (req, res) => {
         const labels = { 'cargo': 'Cargo', 'costs': 'Költségek', 'worktime': 'Munkaidő', 'work-times': 'Munkaidő', 'settings': 'Beállítások' };
         const content = `<div class="card" style="text-align:center; padding:64px;"><h3>⏳ ${labels[p]} modul fejlesztés alatt</h3><p>Hamarosan...</p></div>`;
-        res.send(renderAdminLayout({ title: labels[p], content, activeMenu: p.includes('work') ? 'worktime' : p, csrfToken: req.adminCsrfToken }));
+        res.send(renderAdminLayout({ title: labels[p], content, activeMenu: p.includes('work') ? 'worktime' : p, csrfToken: req.adminCsrfToken, adminRole: req.adminRole }));
     });
 });
 
