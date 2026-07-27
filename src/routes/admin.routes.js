@@ -349,10 +349,12 @@ adminRoutes.get('/drivers', requireAdmin, async (req, res) => {
                     if (r.ok) {
                         const { code } = await r.json();
                         const cell = document.querySelector('.code-cell[data-uuid="' + uuid + '"]');
-                        cell.innerHTML = '<code>' + code + '</code> <button class="btn btn-outline" style="padding:2px 8px; font-size:10px;" onclick="navigator.clipboard.writeText(\\''+code+'\\');showToast(\\'Vágólapra másolva!\\')">📋</button> <button class="btn btn-outline" style="padding:2px 8px; font-size:10px; color:var(--color-error);" onclick="regenerateCode(\\''+uuid+'\\')">🔄</button>';
+                        const regenerate = window.isReadOnlyAdmin ? '' : ' <button class="btn btn-outline" style="padding:2px 8px; font-size:10px; color:var(--color-error);" onclick="regenerateCode(\\''+uuid+'\\')">🔄</button>';
+                        cell.innerHTML = '<code>' + code + '</code> <button class="btn btn-outline" style="padding:2px 8px; font-size:10px;" onclick="navigator.clipboard.writeText(\\''+code+'\\');showToast(\\'Vágólapra másolva!\\')">📋</button>' + regenerate;
                     }
                 }
                 async function regenerateCode(uuid) {
+                    if (window.isReadOnlyAdmin) return showToast('Read-only admin fiokkal ez a muvelet nem elerheto.', 'error');
                     if(!confirm('Új kódot generálsz? A régi azonnal érvényét veszti.')) return;
                     const r = await fetch('/admin/api/drivers/' + uuid + '/regenerate', { method: 'POST', headers: { 'x-csrf-token': window.adminCsrfToken } });
                     if(r.ok) { showToast('Új kód generálva!'); revealCode(uuid); }
