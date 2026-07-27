@@ -12,6 +12,8 @@ Environment:
 - `SMOKE_EXPECTED_COMMIT`: optional expected `/version` commit.
 - `PRODUCTION_SMOKE_ADMIN_TOKEN`: read-only admin token for authenticated production validation.
 
+Authenticated smoke also checks `/ready`, verifies admin pages with a bearer read-only token, confirms unsafe actions are blocked, and compares a no-write business snapshot before and after the run.
+
 The smoke script checks `/health`, `/version`, protected admin redirects, `/admin/work-time/weekly`, and `/api/sync/version`. With a read-only token it also checks dashboard, drivers, hotels, tours, daily Work Time, weekly Work Time, no active read-only write buttons, and verifies a direct write probe is rejected with `403`.
 
 Smoke statuses:

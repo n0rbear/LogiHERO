@@ -8,6 +8,22 @@ function requestIdMiddleware(req, res, next) {
     next();
 }
 
+function securityHeadersMiddleware(req, res, next) {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' https://unpkg.com",
+        "style-src 'self' 'unsafe-inline' https://unpkg.com",
+        "img-src 'self' data: blob: https:",
+        "connect-src 'self' https://router.project-osrm.org https://tile.openstreetmap.org",
+        "frame-ancestors 'none'",
+        "base-uri 'self'"
+    ].join('; '));
+    next();
+}
+
 function adminNoStoreMiddleware(req, res, next) {
     if (req.path === '/admin' || req.path.startsWith('/admin/')) {
         res.setHeader('Cache-Control', 'no-store');
@@ -18,7 +34,7 @@ function adminNoStoreMiddleware(req, res, next) {
 function logSafeError(req, err) {
     const status = Number(err.status || err.statusCode || 500);
     const message = err && err.message ? err.message : 'Unhandled error';
-    console.error(`[ERROR] requestId=${req.requestId || 'unknown'} status=${status} message=${message}`);
+    console.error(`[ERROR] requestId=${req.requestId || 'unknown'} route=${req.originalUrl || req.url} method=${req.method} status=${status} environment=${process.env.NODE_ENV || 'development'} commit=${process.env.APP_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'unknown'} message=${message}`);
 }
 
 function errorHandler(err, req, res, next) {
@@ -46,6 +62,7 @@ function errorHandler(err, req, res, next) {
 
 module.exports = {
     requestIdMiddleware,
+    securityHeadersMiddleware,
     adminNoStoreMiddleware,
     errorHandler
 };

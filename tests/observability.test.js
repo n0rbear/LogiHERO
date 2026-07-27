@@ -50,9 +50,39 @@ test('version endpoint exposes safe build metadata only', async () => {
     assert.equal(JSON.stringify(body).includes('super-secret-token'), false);
 });
 
+test('health is liveness and ready reports sanitized readiness checks', async () => {
+    process.env.APP_COMMIT_SHA = 'ready123';
+    process.env.ADMIN_TOKEN = 'admin-token-value';
+    process.env.DATABASE_URL = 'postgresql://user:secret@example/db';
+    clearProjectModules();
+
+    const pool = require('../src/database/pool');
+    pool.query = async (sql) => {
+        if (sql.includes('information_schema.tables')) return { rows: [{ exists: true }] };
+        if (sql.includes('schema_migrations')) return { rows: [{ count: 1 }] };
+        return { rows: [] };
+    };
+
+    const app = express();
+    app.use(require('../src/routes/health.routes'));
+
+    const health = await request(app, { path: '/health' });
+    assert.equal(health.status, 200);
+    assert.equal(JSON.parse(health.text).database, undefined);
+
+    const ready = await request(app, { path: '/ready' });
+    assert.equal(ready.status, 200);
+    const body = JSON.parse(ready.text);
+    assert.equal(body.status, 'READY');
+    assert.equal(body.checks.config.databaseUrl, 'present');
+    assert.equal(JSON.stringify(body).includes('secret'), false);
+    assert.equal(JSON.stringify(body).includes('admin-token-value'), false);
+});
+
 test('request tracing, admin no-store, x-powered-by removal, and safe 500 body', async () => {
     const {
         requestIdMiddleware,
+        securityHeadersMiddleware,
         adminNoStoreMiddleware,
         errorHandler
     } = require('../src/middleware/http-hardening');
@@ -60,6 +90,7 @@ test('request tracing, admin no-store, x-powered-by removal, and safe 500 body',
     const app = express();
     app.disable('x-powered-by');
     app.use(requestIdMiddleware);
+    app.use(securityHeadersMiddleware);
     app.use(adminNoStoreMiddleware);
     app.get('/admin/broken', () => {
         throw new Error('database password token should not leak');
@@ -74,6 +105,10 @@ test('request tracing, admin no-store, x-powered-by removal, and safe 500 body',
     assert.equal(res.status, 500);
     assert.equal(res.headers['x-request-id'], 'trace-test-1');
     assert.equal(res.headers['cache-control'], 'no-store');
+    assert.equal(res.headers['x-content-type-options'], 'nosniff');
+    assert.equal(res.headers['x-frame-options'], 'DENY');
+    assert.equal(res.headers['referrer-policy'], 'no-referrer');
+    assert.match(res.headers['content-security-policy'], /frame-ancestors 'none'/);
     assert.equal(res.headers['x-powered-by'], undefined);
     assert.match(res.text, /Trace ID: trace-test-1/);
     assert.doesNotMatch(res.text, /database password token/);

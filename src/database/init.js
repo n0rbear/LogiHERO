@@ -3,6 +3,18 @@ const pool = require('./pool');
 const initDb = async () => {
     console.log('[STARTUP] initDb started');
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            id TEXT PRIMARY KEY,
+            description TEXT,
+            applied_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        )
+    `);
+    await pool.query(`
+        INSERT INTO schema_migrations (id, description, applied_at)
+        VALUES ('001_baseline_logihero_schema', 'Baseline current LogiHERO idempotent schema managed by db:init.', $1)
+        ON CONFLICT (id) DO NOTHING
+    `, [Date.now()]);
 
     // 1. Core tables
     const coreQueries = [

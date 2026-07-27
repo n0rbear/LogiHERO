@@ -44,6 +44,7 @@ const workTimeRoutes = require('./src/routes/work-time.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
 const {
     requestIdMiddleware,
+    securityHeadersMiddleware,
     adminNoStoreMiddleware,
     errorHandler
 } = require('./src/middleware/http-hardening');
@@ -55,6 +56,7 @@ const ndp = require('./src/integrations/ndp-client');
 const app = express();
 app.disable('x-powered-by');
 app.use(requestIdMiddleware);
+app.use(securityHeadersMiddleware);
 app.use(adminNoStoreMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));

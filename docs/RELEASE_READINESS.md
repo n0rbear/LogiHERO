@@ -45,6 +45,8 @@
 
 - Public production smoke covers `/health`, `/version`, `/admin/login`, `/admin/work-time`, `/admin/work-time/weekly`, and `/api/sync/version`.
 - Authenticated smoke requires `PRODUCTION_SMOKE_ADMIN_TOKEN`.
+
+Sprint J release readiness additionally requires a verified backup/restore drill, migration drift validation, secret scan, security header regression checks and production `/version` confirmation.
 - If the token is absent, report `BLOCKED_EXTERNAL_CONFIGURATION`, not success.
 
 ## Backup

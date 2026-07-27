@@ -40,6 +40,10 @@ function statusLine(status, message) {
     assert(health.status === 200, '/health must be 200');
     assert(!health.headers['x-powered-by'], 'x-powered-by must be absent');
 
+    const ready = await request('/ready');
+    assert(ready.status === 200, '/ready must be 200');
+    assert(JSON.parse(ready.body).status === 'READY', '/ready must report READY');
+
     const version = await request('/version');
     assert(version.status === 200, '/version must be 200');
     if (expectedCommit) assert(version.body.includes(expectedCommit), '/version must contain expected commit');
@@ -54,12 +58,23 @@ function statusLine(status, message) {
 
     if (readOnlyToken) {
         authenticated = true;
+        const authHeaders = { authorization: `Bearer ${readOnlyToken}`, accept: 'text/html' };
+        const before = await request('/admin/api/smoke-snapshot', {
+            headers: { authorization: `Bearer ${readOnlyToken}`, accept: 'application/json' }
+        });
+        assert(before.status === 200, 'pre-smoke snapshot must be 200');
+        const beforeSnapshot = JSON.parse(before.body);
+        assert(beforeSnapshot.role === 'READ_ONLY', 'smoke credential must be READ_ONLY');
+
         for (const path of ['/admin', '/admin/drivers', '/admin/hotels', '/admin/tours', '/admin/work-time', '/admin/work-time/weekly']) {
-            const response = await request(path, { headers: { authorization: `Bearer ${readOnlyToken}`, accept: 'text/html' } });
+            const response = await request(path, { headers: authHeaders });
             assert(response.status === 200, `${path} read-only bearer access must be 200`);
             assert(!response.body.includes('Internal Server Error'), `${path} must not return 500 body`);
             assert(!response.body.includes('Error:'), `${path} must not expose stack traces`);
             assert(!String(response.body).match(/<button[^>]*(Ment|Torol|Jovahagy|Elutasit)/i), `${path} read-only UI must not expose active write buttons`);
+            assert(!String(response.body).includes('rotate-device-token'), `${path} must not expose token rotation button`);
+            assert(String(response.headers['cache-control'] || '').includes('no-store'), `${path} must be no-store`);
+            assert(!response.headers['x-powered-by'], `${path} x-powered-by must be absent`);
         }
         const denied = await request('/admin/work-time/bulk/approve', {
             method: 'POST',
@@ -67,6 +82,36 @@ function statusLine(status, message) {
             body: JSON.stringify({ days: [] })
         });
         assert(denied.status === 403, 'read-only write attempt must be 403');
+
+        const deniedRotation = await request('/admin/drivers/11111111-1111-4111-8111-111111111111/devices/dev-device-active-1/rotate-token', {
+            method: 'POST',
+            headers: { authorization: `Bearer ${readOnlyToken}` }
+        });
+        assert(deniedRotation.status === 403, 'read-only token rotation attempt must be 403');
+
+        const login = await request('/admin/login', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token: readOnlyToken })
+        });
+        assert(login.status === 200, 'read-only cookie login must be 200');
+        const csrfToken = JSON.parse(login.body).csrfToken;
+        const cookie = Array.isArray(login.headers['set-cookie'])
+            ? login.headers['set-cookie'].map(v => v.split(';')[0]).join('; ')
+            : String(login.headers['set-cookie'] || '').split(';')[0];
+        const logout = await request('/admin/logout', {
+            method: 'POST',
+            headers: { cookie, 'x-csrf-token': csrfToken }
+        });
+        assert([200, 302].includes(logout.status), 'logout must complete without error');
+
+        const after = await request('/admin/api/smoke-snapshot', {
+            headers: { authorization: `Bearer ${readOnlyToken}`, accept: 'application/json' }
+        });
+        assert(after.status === 200, 'post-smoke snapshot must be 200');
+        const afterSnapshot = JSON.parse(after.body);
+        assert(JSON.stringify(afterSnapshot.snapshot) === JSON.stringify(beforeSnapshot.snapshot), 'read-only smoke must not change business counters');
+        assert(afterSnapshot.syncVersion === beforeSnapshot.syncVersion, 'read-only smoke must not change sync version');
     } else {
         statusLine('BLOCKED_MISSING_CREDENTIAL', 'PRODUCTION_SMOKE_ADMIN_TOKEN not set; authenticated read-only checks skipped.');
     }

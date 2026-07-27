@@ -5,6 +5,7 @@ const requireAdmin = require('../middleware/requireAdmin');
 const { requireAdminWrite } = require('../middleware/requireAdmin');
 const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
 const { ADMIN_TOKEN, READ_ONLY_ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
+const { rateLimit } = require('../middleware/rate-limit');
 const { escapeHtml } = require('../utils/escape');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
 const {
@@ -152,7 +153,7 @@ adminRoutes.get('/login', (req, res) => {
 </html>`);
 });
 
-adminRoutes.post('/login', (req, res) => {
+adminRoutes.post('/login', rateLimit({ name: 'admin-login', windowMs: 60_000, max: 10 }), (req, res) => {
     const { token } = req.body;
     const role = verifyAdminToken(token, ADMIN_TOKEN) ? 'FULL_ADMIN' :
         (READ_ONLY_ADMIN_TOKEN && verifyAdminToken(token, READ_ONLY_ADMIN_TOKEN) ? 'READ_ONLY' : null);
@@ -169,6 +170,43 @@ adminRoutes.post('/login', (req, res) => {
         return res.json({ success: true, csrfToken: session.csrfToken });
     }
     res.sendStatus(401);
+});
+
+adminRoutes.get('/api/smoke-snapshot', requireAdmin, async (req, res, next) => {
+    try {
+        const queries = {
+            drivers: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at FROM drivers WHERE deleted_at IS NULL",
+            driverDevices: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at, MAX(token_rotated_at)::bigint AS max_token_rotated_at FROM driver_devices WHERE deleted_at IS NULL",
+            hotels: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at FROM hotels WHERE deleted_at IS NULL",
+            tours: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at FROM tours WHERE deleted_at IS NULL",
+            workDays: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at FROM work_days WHERE deleted_at IS NULL",
+            workEntries: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at FROM work_time_entries WHERE deleted_at IS NULL",
+            conflicts: "SELECT COUNT(*)::int AS count, MAX(updated_at)::bigint AS max_updated_at FROM work_time_conflicts"
+        };
+        const snapshot = {};
+        for (const [name, sql] of Object.entries(queries)) {
+            snapshot[name] = (await pool.query(sql)).rows[0] || {};
+        }
+        const sync = (await pool.query(`
+            SELECT MAX(updated_at)::bigint AS version FROM (
+                SELECT updated_at FROM drivers
+                UNION ALL SELECT updated_at FROM tours
+                UNION ALL SELECT updated_at FROM hotels
+                UNION ALL SELECT updated_at FROM work_days
+                UNION ALL SELECT updated_at FROM work_time_entries
+                UNION ALL SELECT updated_at FROM work_time_conflicts
+            ) v
+        `)).rows[0] || {};
+        console.log(`[SMOKE] requestId=${req.requestId || 'unknown'} actor=admin role=${req.adminRole || 'unknown'} action=snapshot result=ok`);
+        res.json({
+            capturedAt: new Date().toISOString(),
+            role: req.adminRole || 'unknown',
+            syncVersion: Number(sync.version || 0),
+            snapshot
+        });
+    } catch (error) {
+        next(error);
+    }
 });
 
 adminRoutes.post('/logout', requireAdmin, (req, res) => {
@@ -445,7 +483,7 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-adminRoutes.post('/drivers/:uuid/devices/:deviceId/rotate-token', requireAdmin, requireAdminWrite, async (req, res, next) => {
+adminRoutes.post('/drivers/:uuid/devices/:deviceId/rotate-token', requireAdmin, requireAdminWrite, rateLimit({ name: 'token-rotation', windowMs: 60_000, max: 6 }), async (req, res, next) => {
     if (!UUID_RE.test(req.params.uuid)) return res.status(400).json({ error: 'Invalid driver UUID.' });
     const token = generateDeviceToken();
     const now = Date.now();

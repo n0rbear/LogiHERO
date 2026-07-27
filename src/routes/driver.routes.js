@@ -3,6 +3,7 @@ const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const crypto = require('node:crypto');
 const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
+const { rateLimit } = require('../middleware/rate-limit');
 
 const driverProfileRoutes = express.Router();
 const driverReadRoutes = express.Router();
@@ -39,7 +40,7 @@ function sanitizeAdminDriver(body) {
     };
 }
 
-driverProfileRoutes.post('/api/activate-driver', async (req, res) => {
+driverProfileRoutes.post('/api/activate-driver', rateLimit({ name: 'driver-activation', windowMs: 60_000, max: 8 }), async (req, res) => {
     const { code, deviceId, deviceName } = req.body;
     try {
         const result = await pool.query('SELECT * FROM drivers WHERE activation_code = $1 AND is_active = true', [code]);
