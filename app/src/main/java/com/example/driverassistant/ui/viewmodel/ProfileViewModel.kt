@@ -10,11 +10,16 @@ import androidx.lifecycle.viewModelScope
 import com.example.driverassistant.domain.model.SavedLocation
 import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.domain.repository.LocationRepository
+import com.example.driverassistant.data.security.ActivationFailure
+import com.example.driverassistant.data.security.ActivationPolicy
+import com.example.driverassistant.data.security.ActivationUiState
+import com.example.driverassistant.data.security.CredentialState
 import com.example.driverassistant.data.security.DeviceCredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import java.util.Locale
 import javax.inject.Inject
 
@@ -60,6 +65,14 @@ class ProfileViewModel @Inject constructor(
     private val _isLinked = MutableStateFlow(driverUuid != null)
     val isLinked = _isLinked.asStateFlow()
 
+    private val _credentialState = MutableStateFlow(credentialStore.state())
+    val credentialState = _credentialState.asStateFlow()
+
+    private val _activationUiState = MutableStateFlow(
+        ActivationUiState(linked = driverUuid != null, credentialState = credentialStore.state())
+    )
+    val activationUiState = _activationUiState.asStateFlow()
+
     private val _driverUuidFlow = MutableStateFlow(driverUuid)
     val driverUuidFlow = _driverUuidFlow.asStateFlow()
 
@@ -93,17 +106,31 @@ class ProfileViewModel @Inject constructor(
         val cleanCode = code.trim().uppercase(Locale.getDefault())
         if (cleanCode.isBlank()) return
         viewModelScope.launch {
-            val remote = repository.activateDriver(cleanCode, deviceId, "${Build.MANUFACTURER} ${Build.MODEL}".trim())
-            if (remote == null) {
-                _events.emit("Érvénytelen aktiváló kód vagy nem elérhető a szerver.")
+            _activationUiState.value = currentActivationState(activating = true)
+            val remote = try {
+                repository.activateDriver(cleanCode, deviceId, "${Build.MANUFACTURER} ${Build.MODEL}".trim())
+            } catch (error: HttpException) {
+                val body = error.response()?.errorBody()?.string()
+                val failure = ActivationPolicy.classifyHttpFailure(error.code(), body)
+                markActivationFailure(failure)
+                return@launch
+            } catch (error: Exception) {
+                markActivationFailure(ActivationPolicy.classifyThrowable(error))
                 return@launch
             }
-            if (!remote.deviceToken.isNullOrBlank()) {
-                if (!credentialStore.saveDeviceToken(remote.deviceToken)) {
-                    _events.emit("Az eszköz token biztonságos mentése nem sikerült. Újraaktiválás szükséges.")
-                    return@launch
-                }
+            if (remote == null) {
+                markActivationFailure(ActivationFailure.NETWORK)
+                return@launch
             }
+            if (remote.deviceToken.isNullOrBlank()) {
+                markActivationFailure(ActivationFailure.MISSING_TOKEN)
+                return@launch
+            }
+            if (!credentialStore.saveDeviceToken(remote.deviceToken)) {
+                markActivationFailure(ActivationFailure.BAD_RESPONSE)
+                return@launch
+            }
+            _credentialState.value = credentialStore.state()
             applyRemoteProfile(
                 uuid = remote.uuid,
                 name = remote.name,
@@ -116,8 +143,15 @@ class ProfileViewModel @Inject constructor(
                 updatedAt = remote.profileUpdatedAt ?: 0L
             )
             _isLinked.value = true
+            _activationUiState.value = currentActivationState()
             _events.emit("Telefon társítva: ${remote.name}")
         }
+    }
+
+    fun markReactivationRequired(reason: CredentialState = CredentialState.REACTIVATION_REQUIRED) {
+        credentialStore.markState(reason)
+        _credentialState.value = reason
+        _activationUiState.value = currentActivationState()
     }
 
     fun updateProfile(name: String, phone: String, email: String, whatsapp: String, telegram: String, plate: String) {
@@ -247,6 +281,7 @@ class ProfileViewModel @Inject constructor(
         driverUuid = uuid ?: driverUuid
         _driverUuidFlow.value = driverUuid
         _isLinked.value = driverUuid != null
+        _activationUiState.value = currentActivationState()
         profileUpdatedAt = updatedAt
         _driverName.value = name
         _driverPhone.value = phone
@@ -291,10 +326,12 @@ class ProfileViewModel @Inject constructor(
             // 4. Clear profile binding but keep this local device id for future pairing.
             prefs.edit().clear().putString("device_id", deviceId).apply()
             credentialStore.clear()
+            _credentialState.value = credentialStore.state()
             driverUuid = null
             _driverUuidFlow.value = null
             profileUpdatedAt = 0L
             _isLinked.value = false
+            _activationUiState.value = currentActivationState()
 
             // 5. Emit event to UI
             _events.emit("LOGOUT_SUCCESS")
@@ -340,4 +377,21 @@ class ProfileViewModel @Inject constructor(
             }
         }
     }
+
+    private fun markActivationFailure(failure: ActivationFailure) {
+        _activationUiState.value = currentActivationState(activating = false, failure = failure)
+        viewModelScope.launch {
+            _events.emit(ActivationPolicy.message(failure))
+        }
+    }
+
+    private fun currentActivationState(
+        activating: Boolean = false,
+        failure: ActivationFailure? = null
+    ): ActivationUiState = ActivationUiState(
+        linked = driverUuid != null,
+        credentialState = credentialStore.state(),
+        activating = activating,
+        lastFailure = failure
+    )
 }

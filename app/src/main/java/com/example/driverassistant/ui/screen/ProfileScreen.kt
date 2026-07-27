@@ -29,6 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.driverassistant.BuildConfig
+import com.example.driverassistant.data.security.ActivationPolicy
+import com.example.driverassistant.data.security.ActivationUiState
 import com.example.driverassistant.ui.viewmodel.ProfileViewModel
 import kotlinx.coroutines.flow.collectLatest
 
@@ -44,6 +46,7 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
     val driverPhoto by viewModel.driverPhoto.collectAsState()
     val driverUuid by viewModel.driverUuidFlow.collectAsState()
     val isLinked by viewModel.isLinked.collectAsState()
+    val activationUiState by viewModel.activationUiState.collectAsState()
     
     val context = LocalContext.current
     val activity = context as? android.app.Activity
@@ -117,18 +120,13 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
             ProfileInfoRow("Telegram", driverTelegram.ifBlank { "Nincs megadva" })
             ProfileInfoRow("Alapértelmezett Rendszám", defaultPlate.ifBlank { "Nincs megadva" })
             ProfileInfoRow("Web társítás", if (isLinked) "Aktív" else "Nincs társítva")
+            ActivationStatusPanel(
+                state = activationUiState,
+                onOpenActivation = { showLinkDialog = true }
+            )
             
             Spacer(modifier = Modifier.height(16.dp))
             
-            if (!isLinked) {
-                OutlinedButton(onClick = { showLinkDialog = true }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Link, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Telefon társítása webes profillal")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
             Button(onClick = { showEditDialog = true }) {
                 Text("Profil szerkesztése")
             }
@@ -270,6 +268,44 @@ fun LinkDeviceDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
             }
         }
     )
+}
+
+@Composable
+fun ActivationStatusPanel(
+    state: ActivationUiState,
+    onOpenActivation: () -> Unit
+) {
+    if (state.syncAllowed) {
+        ElevatedCard(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Eszköz aktív", style = MaterialTheme.typography.titleSmall)
+                Text("A szinkron engedélyezett, a token biztonságos tárolóban van.")
+            }
+        }
+        return
+    }
+
+    ElevatedCard(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val title = if (state.needsReactivation) "Újraaktiválás szükséges" else "Aktiválás szükséges"
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            Text(
+                if (state.needsReactivation) {
+                    "A token megváltozott vagy az eszköz jogosultsága megszűnt. A helyi adatok és függő munkaidők megmaradnak."
+                } else {
+                    "Írd be az admin felületen generált aktiváló kódot a backend kapcsolathoz."
+                }
+            )
+            state.lastFailure?.let { failure ->
+                Text(ActivationPolicy.message(failure), color = MaterialTheme.colorScheme.error)
+            }
+            OutlinedButton(onClick = onOpenActivation, enabled = !state.activating, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Link, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (state.needsReactivation) "Újraaktiválás" else "Telefon aktiválása")
+            }
+        }
+    }
 }
 
 @Composable

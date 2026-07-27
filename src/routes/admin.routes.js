@@ -346,15 +346,16 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
             content: '<div class="card">Sofőr nem található.</div>'
         }));
         const tours = (await pool.query('SELECT id, name, tour_status, date, is_current FROM tours WHERE driver_uuid = $1 OR driver_name = $2 ORDER BY date DESC LIMIT 8', [driver.uuid, driver.name])).rows;
-        const devices = (await pool.query('SELECT device_id, device_name, is_active, linked_at, last_seen_at FROM driver_devices WHERE driver_uuid = $1 ORDER BY last_seen_at DESC NULLS LAST', [driver.uuid])).rows;
+        const devices = (await pool.query('SELECT device_id, device_name, is_active, linked_at, last_seen_at, revision, token_rotated_at FROM driver_devices WHERE driver_uuid = $1 ORDER BY last_seen_at DESC NULLS LAST', [driver.uuid])).rows;
         const lastUpdate = (await pool.query('SELECT status, current_tour, timestamp FROM live_updates WHERE driver_uuid = $1 OR driver_name = $2 ORDER BY timestamp DESC LIMIT 1', [driver.uuid, driver.name])).rows[0];
 
         const tourRows = tours.map(t => `
             <tr><td>#${t.id}</td><td>${escapeHtml(t.name || '—')}</td><td>${escapeHtml(t.tour_status || '—')}</td><td>${formatDateTime(t.date)}</td><td>${t.is_current ? 'Igen' : 'Nem'}</td></tr>
         `).join('') || '<tr><td colspan="5" style="text-align:center;">Nincs kapcsolódó túra.</td></tr>';
+        const canRotateToken = req.adminRole !== 'READ_ONLY';
         const deviceRows = devices.map(d => `
-            <tr><td>${escapeHtml(d.device_name || '—')}</td><td><code>${escapeHtml(d.device_id || '')}</code></td><td>${d.is_active ? 'Aktív' : 'Leválasztva'}</td><td>${formatDateTime(d.last_seen_at)}</td></tr>
-        `).join('') || '<tr><td colspan="4" style="text-align:center;">Nincs eszközadat.</td></tr>';
+            <tr><td>${escapeHtml(d.device_name || '—')}</td><td><code>${escapeHtml(d.device_id || '')}</code></td><td>${d.is_active ? 'Aktív' : 'Leválasztva'}</td><td>${formatDateTime(d.last_seen_at)}</td><td>${escapeHtml(d.revision || 1)}</td><td>${formatDateTime(d.token_rotated_at)}</td><td>${canRotateToken ? `<button class="btn btn-outline rotate-device-token" data-device-id="${escapeHtml(d.device_id || '')}" onclick="rotateDeviceToken(this)">Token rotation</button>` : '<span class="badge">Read-only</span>'}</td></tr>
+        `).join('') || '<tr><td colspan="7" style="text-align:center;">Nincs eszközadat.</td></tr>';
 
         const content = `
             <div style="display:grid; grid-template-columns:minmax(280px, 1fr) 2fr; gap:24px;">
@@ -378,7 +379,12 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                     </div>
                     <div class="card">
                         <h4 style="margin-top:0;">Eszközök</h4>
-                        <table style="width:100%; border-collapse:collapse;"><thead><tr><th>Név</th><th>Device ID</th><th>Állapot</th><th>Utolsó</th></tr></thead><tbody>${deviceRows}</tbody></table>
+                        <table style="width:100%; border-collapse:collapse;"><thead><tr><th>Név</th><th>Device ID</th><th>Állapot</th><th>Utolsó</th><th>Rev</th><th>Rotálva</th><th>Művelet</th></tr></thead><tbody>${deviceRows}</tbody></table>
+                        <div id="rotated-token-panel" style="display:none; margin-top:12px; padding:12px; border:1px solid var(--color-border); border-radius:8px; background:#fff7ed;">
+                            <b>Új device token</b>
+                            <p style="margin:6px 0;">Csak most látható. Frissítés után eltűnik.</p>
+                            <code id="rotated-token-value" data-testid="rotated-token-value"></code>
+                        </div>
                     </div>
                 </div>
                 <div>
@@ -418,6 +424,20 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                     if (!res.ok) return showToast('Deaktiválás sikertelen.', 'error');
                     showToast('Sofőr deaktiválva.');
                     setTimeout(() => location.reload(), 500);
+                }
+                async function rotateDeviceToken(button) {
+                    if (window.isReadOnlyAdmin) return showToast('Read-only admin nem rotalhat tokent.', 'error');
+                    if (!confirm('Uj tokent general ehhez az eszkohoz? A regi token azonnal ervenytelen lesz.')) return;
+                    const deviceId = button.dataset.deviceId;
+                    const res = await fetch('/admin/drivers/' + driverUuid + '/devices/' + encodeURIComponent(deviceId) + '/rotate-token', {
+                        method: 'POST',
+                        headers: { 'x-csrf-token': window.adminCsrfToken }
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return showToast(data.error || 'Token rotation sikertelen.', 'error');
+                    document.getElementById('rotated-token-value').textContent = data.token || '';
+                    document.getElementById('rotated-token-panel').style.display = 'block';
+                    showToast('Token rotation kesz. Az uj token csak most lathato.');
                 }
             </script>
         `;

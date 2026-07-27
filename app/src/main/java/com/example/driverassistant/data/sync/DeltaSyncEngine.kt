@@ -1,13 +1,17 @@
 package com.example.driverassistant.data.sync
 
+import android.content.Context
 import android.util.Log
 import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.data.api.DeltaSyncApplyResponse
 import com.example.driverassistant.data.api.DeltaSyncRequest
 import com.example.driverassistant.data.api.DeltaSyncResponse
 import com.example.driverassistant.data.api.SyncConflictResponse
+import com.example.driverassistant.data.security.CredentialState
+import com.example.driverassistant.data.security.DeviceCredentialStore
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import dagger.hilt.android.qualifiers.ApplicationContext
 import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
@@ -28,9 +32,11 @@ sealed class DeltaSyncResult {
 
 @Singleton
 class DeltaSyncEngine @Inject constructor(
-    private val backendApi: BackendApi
+    private val backendApi: BackendApi,
+    @ApplicationContext context: Context
 ) {
     private val gson = Gson()
+    private val credentialStore = DeviceCredentialStore(context)
 
     suspend fun sync(
         since: Long,
@@ -70,6 +76,10 @@ class DeltaSyncEngine @Inject constructor(
                         SyncConflictResponse(error = "SYNC_CONFLICT")
                     }
                     return DeltaSyncResult.Conflict(conflict)
+                }
+                if (error.code() == 401 || error.code() == 403) {
+                    credentialStore.markState(CredentialState.REACTIVATION_REQUIRED)
+                    return DeltaSyncResult.Failed(error)
                 }
                 lastError = error
                 if (error.code() in 400..499) return DeltaSyncResult.Failed(error)

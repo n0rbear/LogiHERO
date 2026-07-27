@@ -33,6 +33,7 @@ class WorkTimeConflictUiInstrumentedTest {
         }
 
         compose.onNodeWithText("Status: UNRESOLVED | Reason: STALE_REVISION").assertIsDisplayed()
+        compose.onNodeWithText("Open detail").performClick()
         compose.onNodeWithText("Local value: status=DRIVING, approval_status=PENDING, revision=1").assertIsDisplayed()
         compose.onNodeWithText("Server value: status=WORK, approval_status=PENDING, revision=2").assertIsDisplayed()
         compose.onNodeWithText("Server").performClick()

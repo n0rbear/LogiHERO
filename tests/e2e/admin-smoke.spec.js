@@ -111,6 +111,19 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.getByRole('button', { name: /Jovahagyas|Jóváhagyás/i }).click();
     await expect(page.getByText(/Allapot mentve|Állapot mentve/i)).toBeVisible();
 
+    await page.goto('/admin/drivers');
+    await page.getByRole('row', { name: /LogiHERO Dev Driver Active/i }).getByRole('button', { name: /Adatlap/i }).click();
+    await expect(page.locator('.rotate-device-token').first()).toBeVisible();
+    await page.waitForTimeout(700);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.locator('.rotate-device-token').first().evaluate((button) => button.click());
+    await expect(page.locator('#rotated-token-panel')).toBeVisible();
+    const rotatedToken = await page.locator('#rotated-token-value').textContent();
+    expect(rotatedToken).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+    expect(rotatedToken).not.toContain('dev-device-token-active-1');
+    await page.reload();
+    await expect(page.locator('#rotated-token-panel')).toBeHidden();
+
     await page.goto('/admin/work-time/weekly');
     await expect(page.locator('table')).toContainText('LogiHERO Dev Driver Active');
     await page.getByRole('link', { name: /Kovetkezo|Következő/i }).click();
@@ -149,7 +162,11 @@ test('read-only admin cannot write in real Chromium', async ({ page }) => {
     expect(denied.status()).toBe(403);
 
     await page.goto('/admin/drivers');
-    await expect(page.locator('body')).not.toContainText('rotate-token');
+    await expect(page.locator('.rotate-device-token')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('Token rotation');
+
+    const directRotate = await page.request.post('/admin/drivers/11111111-1111-4111-8111-111111111111/devices/dev-device-active-1/rotate-token');
+    expect(directRotate.status()).toBe(403);
 
     await page.getByRole('button', { name: /Kijelentkez/i }).click();
     await expect(page).toHaveURL(/\/admin\/login/);

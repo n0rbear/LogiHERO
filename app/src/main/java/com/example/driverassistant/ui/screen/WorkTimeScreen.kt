@@ -18,7 +18,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -142,6 +145,7 @@ fun ConflictCard(
         conflict.adminCorrection ||
         conflict.reason.contains("SOFT_DELETED") ||
         conflict.reason.contains("OVERLAP")
+    var showDetail by remember { mutableStateOf(false) }
     ElevatedCard {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("UUID: ${conflict.uuid}", style = MaterialTheme.typography.labelLarge)
@@ -150,8 +154,12 @@ fun ConflictCard(
             Text("Local revision: ${conflict.localRevision ?: "-"} | Backend revision: ${conflict.backendRevision ?: "-"}")
             Text("Approval: ${conflict.approvalStatus ?: "-"} | Admin correction: ${if (conflict.adminCorrection) "yes" else "no"}")
             Text("Created: ${conflict.createdAt?.let(::timeText) ?: "-"}")
-            Text("Local value: ${friendlyValue(conflict.localValue)}")
-            Text("Server value: ${friendlyValue(conflict.backendValue)}")
+            OutlinedButton(onClick = { showDetail = !showDetail }) {
+                Text(if (showDetail) "Hide details" else "Open detail")
+            }
+            if (showDetail) {
+                ConflictDetailSection(conflict)
+            }
             if (manualReview) Text("Manual admin review required.", color = MaterialTheme.colorScheme.error)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onAcceptServer, modifier = Modifier.weight(1f), enabled = conflict.resolutionStatus == "UNRESOLVED") {
@@ -165,6 +173,21 @@ fun ConflictCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun ConflictDetailSection(conflict: WorkTimeConflictDto) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Conflict detail", style = MaterialTheme.typography.titleSmall)
+        Text("Local value: ${friendlyValue(conflict.localValue)}")
+        Text("Server value: ${friendlyValue(conflict.backendValue)}")
+        Text("Backend revision: ${conflict.backendRevision ?: "-"}")
+        Text("Local revision: ${conflict.localRevision ?: "-"}")
+        Text("Approval: ${conflict.approvalStatus ?: "-"}")
+        Text("Admin correction: ${if (conflict.adminCorrection) "yes" else "no"}")
+        Text("Resolved: ${conflict.resolvedAt?.let(::timeText) ?: "-"}")
+        Text("Reason: ${conflict.reason}")
     }
 }
 

@@ -6,6 +6,7 @@ import com.example.driverassistant.domain.repository.DriverRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
+import retrofit2.HttpException
 import javax.inject.Inject
 
 class DriverRepositoryImpl @Inject constructor(
@@ -199,7 +200,13 @@ class DriverRepositoryImpl @Inject constructor(
     }
 
     override suspend fun getProfile(name: String): com.example.driverassistant.data.api.ApiProfileResponse? = try { backendApi.getProfile(name) } catch (e: Exception) { null }
-    override suspend fun activateDriver(code: String, deviceId: String, deviceName: String): com.example.driverassistant.data.api.ApiProfileResponse? = try { backendApi.activateDriver(com.example.driverassistant.data.api.ActivateDriverRequest(code, deviceId, deviceName)) } catch (e: Exception) { null }
+    override suspend fun activateDriver(code: String, deviceId: String, deviceName: String): com.example.driverassistant.data.api.ApiProfileResponse? = try {
+        backendApi.activateDriver(com.example.driverassistant.data.api.ActivateDriverRequest(code, deviceId, deviceName))
+    } catch (e: HttpException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
     override suspend fun unlinkDevice(uuid: String?, deviceId: String) { try { backendApi.unlinkDevice(com.example.driverassistant.data.api.UnlinkDeviceRequest(uuid, deviceId)) } catch (e: Exception) { } }
     override suspend fun getProfileByUuid(uuid: String): com.example.driverassistant.data.api.ApiProfileResponse? = try { backendApi.getProfileByUuid(uuid) } catch (e: Exception) { null }
     override suspend fun uploadPhoto(driverName: String, base64: String, uuid: String?): com.example.driverassistant.data.api.PhotoUploadResponse? = try { backendApi.uploadPhoto(com.example.driverassistant.data.api.PhotoUploadRequest(driverName, base64, uuid)) } catch (e: Exception) { null }
