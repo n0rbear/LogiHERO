@@ -1,24 +1,28 @@
 const { defineConfig, devices } = require('@playwright/test');
 
+const localE2eBaseUrl = 'http://127.0.0.1:3100';
+const externalE2eBaseUrl = (process.env.LOGIHERO_E2E_BASE_URL || '').trim();
+const useExternalE2eServer = Boolean(externalE2eBaseUrl || process.env.LOGIHERO_E2E_EXTERNAL_SERVER);
+
 module.exports = defineConfig({
     testDir: './tests/e2e',
     timeout: 60000,
     expect: { timeout: 10000 },
     reporter: [['list']],
     use: {
-        baseURL: 'http://127.0.0.1:3100',
+        baseURL: externalE2eBaseUrl || localE2eBaseUrl,
         trace: 'retain-on-failure',
         screenshot: 'only-on-failure'
     },
-    webServer: process.env.LOGIHERO_E2E_EXTERNAL_SERVER ? undefined : {
+    webServer: useExternalE2eServer ? undefined : {
         command: 'node scripts/e2e-server.js',
-        url: 'http://127.0.0.1:3100/health',
+        url: `${localE2eBaseUrl}/health`,
         reuseExistingServer: false,
         timeout: 120000
     },
     projects: [
         {
-            name: process.env.LOGIHERO_E2E_EXTERNAL_SERVER ? 'local-e2e' : 'local-e2e',
+            name: 'local-e2e',
             testIgnore: /production-smoke\.spec\.js/,
             use: {
                 ...devices['Desktop Chrome'],
