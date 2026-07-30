@@ -7,8 +7,8 @@ const includeAndroidConnected = process.argv.includes('--connected-android') || 
 function buildCommandInvocation(command, args = [], options = {}) {
     const platform = options.platform || process.platform;
     const env = options.env || process.env;
-    const isWindowsCmd = platform === 'win32' && /\.cmd$/i.test(command);
-    if (!isWindowsCmd) {
+    const isWindowsCommandScript = platform === 'win32' && /\.(?:cmd|bat)$/i.test(command);
+    if (!isWindowsCommandScript) {
         return { command, args };
     }
 
