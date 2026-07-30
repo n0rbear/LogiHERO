@@ -65,6 +65,7 @@ function renderDriverForm({ driver = {}, mode, csrfToken, error = '' }) {
             </form>
         </div>
         <script>
+            const driverFormIsEdit = ${isEdit ? 'true' : 'false'};
             document.getElementById('driverForm').addEventListener('submit', async (event) => {
                 event.preventDefault();
                 const form = event.currentTarget;
@@ -79,7 +80,9 @@ function renderDriverForm({ driver = {}, mode, csrfToken, error = '' }) {
                     const payload = await res.json().catch(async () => ({ error: await res.text() }));
                     if (!res.ok) throw new Error(payload.error || 'Mentés sikertelen.');
                     showToast('Sofőr mentve.');
-                    setTimeout(() => location.href = payload.uuid ? '/admin/drivers/' + payload.uuid : '/admin/drivers', 450);
+                    if (!driverFormIsEdit) {
+                        setTimeout(() => location.href = payload.uuid ? '/admin/drivers/' + payload.uuid : '/admin/drivers', 450);
+                    }
                 } catch (err) {
                     showToast(err.message, 'error');
                 }
@@ -445,8 +448,12 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                         <table style="width:100%; border-collapse:collapse;"><thead><tr><th>ID</th><th>Név</th><th>Státusz</th><th>Dátum</th><th>Aktuális</th></tr></thead><tbody>${tourRows}</tbody></table>
                     </div>
                     <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
-                        <div><b>Sofőr deaktiválása</b><br><small style="color:var(--color-text-muted);">Az üzleti adatok megmaradnak, a sofőr inaktív lesz.</small></div>
-                        <button class="btn btn-outline" style="color:var(--color-error);" onclick="deactivateDriver()">Deaktiválás</button>
+                        <div>
+                            <b>Sofőr deaktiválása</b><br>
+                            <small style="color:var(--color-text-muted);">Az üzleti adatok megmaradnak, a sofőr inaktív lesz.</small>
+                            <div id="driver-action-message" aria-live="polite" style="margin-top:8px; color:var(--color-success); font-weight:600;"></div>
+                        </div>
+                        <button type="button" id="deactivate-driver-button" class="btn btn-outline" style="color:var(--color-error);">Deaktiválás</button>
                     </div>
                 </div>
             </div>
@@ -472,10 +479,22 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                         headers: { 'Content-Type': 'application/json', 'x-csrf-token': window.adminCsrfToken },
                         body: JSON.stringify({ uuid: driverUuid })
                     });
-                    if (!res.ok) return showToast('Deaktiválás sikertelen.', 'error');
+                    const message = document.getElementById('driver-action-message');
+                    if (!res.ok) {
+                        if (message) {
+                            message.style.color = 'var(--color-error)';
+                            message.textContent = 'Deaktiválás sikertelen.';
+                        }
+                        return showToast('Deaktiválás sikertelen.', 'error');
+                    }
+                    if (message) {
+                        message.style.color = 'var(--color-success)';
+                        message.textContent = 'Állapot: inaktív.';
+                    }
                     showToast('Sofőr deaktiválva.');
-                    setTimeout(() => location.reload(), 500);
+                    document.querySelector('input[name="is_active"]').checked = false;
                 }
+                document.getElementById('deactivate-driver-button')?.addEventListener('click', deactivateDriver);
                 async function rotateDeviceToken(button) {
                     if (window.isReadOnlyAdmin) return showToast('Read-only admin nem rotalhat tokent.', 'error');
                     if (!confirm('Uj tokent general ehhez az eszkohoz? A regi token azonnal ervenytelen lesz.')) return;
@@ -531,6 +550,7 @@ adminRoutes.post('/drivers/:uuid/devices/:deviceId/rotate-token', requireAdmin, 
 
 adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
     try {
+        const canWrite = req.adminRole !== 'READ_ONLY';
         const drivers = (await pool.query('SELECT name FROM drivers WHERE is_active = true ORDER BY name ASC')).rows;
         const hotels = (await pool.query(`
             SELECT id, uuid::TEXT, 'hotel'::TEXT AS source, driver_name, name,
@@ -612,7 +632,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                         <div style="margin-top:16px;"><label style="display:block; margin-bottom:8px; font-weight:600;">Megjegyzés</label><textarea name="notes" style="width:100%; min-height:90px;"></textarea></div>
                         <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:18px;">
                             <button type="button" class="btn btn-outline" onclick="closeHotelModal()">Mégse</button>
-                            <button type="submit" class="btn btn-primary">Hotel mentése</button>
+                            ${canWrite ? '<button type="submit" class="btn btn-primary">Hotel mentése</button>' : '<span class="badge">Read-only</span>'}
                         </div>
                     </form>
                 </div>
@@ -659,7 +679,8 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                     selectedId = key;
                     const h = hotels.find(item => hotelKey(item) === key);
                     if (!h) return;
-                    document.getElementById('hotel-detail').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px;"><h3 style="margin-top:0;">'+esc(h.name || '')+'</h3><button class="btn btn-primary" onclick="openHotelModal(\\''+key+'\\')">Szerkesztés</button></div><p>'+esc(h.address || '')+'</p><p><b>Koordináták:</b> '+esc(h.latitude || '—')+', '+esc(h.longitude || '—')+'</p><p><b>Telefon:</b> '+esc(h.phone || '—')+' &nbsp; <b>Email:</b> '+esc(h.email || '—')+'</p><p><b>Megjegyzés:</b> '+esc(h.notes || '—')+'</p>' + (h.latitude && h.longitude ? '<a class="btn btn-outline" target="_blank" href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(h.latitude+','+h.longitude)+'">Google Maps</a>' : '');
+                    const editButton = window.isReadOnlyAdmin ? '<span class="badge">Read-only</span>' : '<button class="btn btn-primary" onclick="openHotelModal(\\''+key+'\\')">Szerkesztés</button>';
+                    document.getElementById('hotel-detail').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px;"><h3 style="margin-top:0;">'+esc(h.name || '')+'</h3>'+editButton+'</div><p>'+esc(h.address || '')+'</p><p><b>Koordináták:</b> '+esc(h.latitude || '—')+', '+esc(h.longitude || '—')+'</p><p><b>Telefon:</b> '+esc(h.phone || '—')+' &nbsp; <b>Email:</b> '+esc(h.email || '—')+'</p><p><b>Megjegyzés:</b> '+esc(h.notes || '—')+'</p>' + (h.latitude && h.longitude ? '<a class="btn btn-outline" target="_blank" href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(h.latitude+','+h.longitude)+'">Google Maps</a>' : '');
                     renderHotels();
                 }
                 function openHotelModal(key) {
@@ -696,7 +717,7 @@ adminRoutes.get('/api/drivers/:uuid/code', requireAdmin, async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-adminRoutes.post('/api/drivers/:uuid/regenerate', requireAdmin, async (req, res) => {
+adminRoutes.post('/api/drivers/:uuid/regenerate', requireAdmin, requireAdminWrite, async (req, res) => {
     try {
         const newCode = crypto.randomBytes(4).toString('hex').toUpperCase();
         await pool.query('UPDATE drivers SET activation_code = $1 WHERE uuid = $2', [newCode, req.params.uuid]);

@@ -35,7 +35,10 @@ function statusLine(status, message) {
 }
 
 function readOnlyWriteButtons(body) {
-    const matches = String(body).match(/<button\b[\s\S]*?<\/button>/gi) || [];
+    const html = String(body)
+        .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+        .replace(/<style\b[\s\S]*?<\/style>/gi, '');
+    const matches = html.match(/<button\b[\s\S]*?<\/button>/gi) || [];
     return matches.filter((button) => {
         const text = button.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
         const normalized = `${button} ${text}`
