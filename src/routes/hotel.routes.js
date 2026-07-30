@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const HotelEngine = require('../engines/hotel-engine');
 const ndp = require('../integrations/ndp-client');
 
@@ -175,7 +176,7 @@ hotelManagementRoutes.post('/api/hotels/:hotelId/report-problem', async (req, re
 // LEGACY & ADMIN ENDPOINTS (UPDATED)
 // ==========================================
 
-hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, async (req, res) => {
+hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, requireAdminWrite, async (req, res) => {
     const { source, id, uuid } = req.body;
     const h = sanitizeHotel(req.body);
     const now = Date.now();

@@ -4,6 +4,7 @@ const {
     verifyAdminToken,
     verifyCsrfToken
 } = require('../utils/admin-session');
+const ndp = require('../integrations/ndp-client');
 
 const parseCookies = (header) => {
     if (!header) return {};
@@ -23,6 +24,24 @@ const wantsJson = (req) => {
 
 const isUnsafeMethod = (method) => !['GET', 'HEAD', 'OPTIONS'].includes(method);
 const isSessionLogout = (req) => req.originalUrl === '/admin/logout';
+
+function trackReadOnlyDenied(req) {
+    ndp.trackEvent({
+        traceId: req.requestId || ndp.getTraceId(req),
+        eventType: 'admin_read_only_write_denied',
+        severity: 'WARNING',
+        title: 'Read-only admin write denied',
+        component: 'admin-auth',
+        payload: {
+            route: req.originalUrl || req.url,
+            method: req.method,
+            role: 'READ_ONLY',
+            authType: req.adminAuthType || 'unknown',
+            status: 403,
+            requestId: req.requestId || 'unknown'
+        }
+    });
+}
 
 const requireAdmin = (req, res, next) => {
     // 1. Check if ADMIN_TOKEN is configured
@@ -88,6 +107,7 @@ const requireAdmin = (req, res, next) => {
         req.adminRole = session.role || 'FULL_ADMIN';
         if (req.adminRole === 'READ_ONLY' && isUnsafeMethod(req.method) && !isSessionLogout(req)) {
             console.log(`[ADMIN_AUTH] requestId=${req.requestId || 'unknown'} actor=admin role=READ_ONLY action=write_denied result=403`);
+            trackReadOnlyDenied(req);
             return res.status(403).json({ error: 'Read-only admin cannot perform write actions.' });
         }
         if (isUnsafeMethod(req.method) && !verifyCsrfToken(session, req.headers['x-csrf-token'] || req.body?._csrf)) {
@@ -114,6 +134,7 @@ const requireAdmin = (req, res, next) => {
 function requireAdminWrite(req, res, next) {
     if (req.adminRole === 'READ_ONLY') {
         console.log(`[ADMIN_AUTH] requestId=${req.requestId || 'unknown'} actor=admin role=READ_ONLY action=write_denied result=403`);
+        trackReadOnlyDenied(req);
         return res.status(403).json({ error: 'Read-only admin cannot perform write actions.' });
     }
     return next();

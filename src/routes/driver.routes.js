@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const crypto = require('node:crypto');
 const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
 const { rateLimit } = require('../middleware/rate-limit');
@@ -158,7 +159,7 @@ driverProfileRoutes.get('/api/get-profile-by-uuid/:uuid', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-driverProfileRoutes.post('/admin/unlink-driver-devices', requireAdmin, async (req, res) => {
+driverProfileRoutes.post('/admin/unlink-driver-devices', requireAdmin, requireAdminWrite, async (req, res) => {
     const { uuid } = req.body;
     if (!uuid) return res.status(400).send('Missing driver uuid');
     try {
@@ -167,7 +168,7 @@ driverProfileRoutes.post('/admin/unlink-driver-devices', requireAdmin, async (re
     } catch (e) { res.status(500).send(e.message); }
 });
 
-driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) => {
+driverProfileRoutes.post('/admin/save-driver', requireAdmin, requireAdminWrite, async (req, res) => {
     let d;
     try {
         d = sanitizeAdminDriver(req.body);
@@ -221,7 +222,7 @@ driverProfileRoutes.post('/admin/save-driver', requireAdmin, async (req, res) =>
     }
 });
 
-driverProfileRoutes.post('/admin/delete-driver', requireAdmin, async (req, res) => {
+driverProfileRoutes.post('/admin/delete-driver', requireAdmin, requireAdminWrite, async (req, res) => {
     const { uuid } = req.body;
     if (!UUID_RE.test(uuid || '')) return res.status(400).json({ error: 'Hibás sofőr UUID.' });
     try {

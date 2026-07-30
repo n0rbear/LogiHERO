@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
 const renderAdminLayout = require('../utils/admin-layout');
 const { escapeHtml } = require('../utils/escape');
@@ -665,7 +666,7 @@ async function correctEntry(req, res, next, actorType = 'ADMIN') {
 }
 
 router.post('/api/work-time/entries/:uuid/correct', (req, res, next) => correctEntry(req, res, next, 'DRIVER'));
-router.post('/admin/work-time/:uuid/correct', requireAdmin, (req, res, next) => correctEntry(req, res, next, 'ADMIN'));
+router.post('/admin/work-time/:uuid/correct', requireAdmin, requireAdminWrite, (req, res, next) => correctEntry(req, res, next, 'ADMIN'));
 
 async function setApproval(req, res, next, status) {
     if (!UUID_RE.test(req.params.uuid)) return res.status(400).json({ error: 'Invalid UUID.' });
@@ -702,9 +703,9 @@ async function setApproval(req, res, next, status) {
     }
 }
 
-router.post('/admin/work-time/:uuid/approve', requireAdmin, (req, res, next) => setApproval(req, res, next, 'APPROVED'));
-router.post('/admin/work-time/:uuid/reject', requireAdmin, (req, res, next) => setApproval(req, res, next, 'REJECTED'));
-router.post('/admin/work-time/:uuid/request-correction', requireAdmin, (req, res, next) => setApproval(req, res, next, 'CORRECTION_REQUIRED'));
+router.post('/admin/work-time/:uuid/approve', requireAdmin, requireAdminWrite, (req, res, next) => setApproval(req, res, next, 'APPROVED'));
+router.post('/admin/work-time/:uuid/reject', requireAdmin, requireAdminWrite, (req, res, next) => setApproval(req, res, next, 'REJECTED'));
+router.post('/admin/work-time/:uuid/request-correction', requireAdmin, requireAdminWrite, (req, res, next) => setApproval(req, res, next, 'CORRECTION_REQUIRED'));
 
 router.get('/admin/work-time/weekly', requireAdmin, async (req, res, next) => {
     try {
@@ -829,7 +830,7 @@ router.get('/admin/work-time/weekly/:driverUuid', requireAdmin, async (req, res,
     }
 });
 
-router.post('/admin/work-time/bulk/:action', requireAdmin, async (req, res, next) => {
+router.post('/admin/work-time/bulk/:action', requireAdmin, requireAdminWrite, async (req, res, next) => {
     const map = { approve: 'APPROVED', reject: 'REJECTED', 'request-correction': 'CORRECTION_REQUIRED' };
     const status = map[req.params.action];
     if (!status) return res.status(400).json({ error: 'Invalid bulk action.' });

@@ -13,6 +13,7 @@ function clearProjectModules() {
 
 function useProductionEnv(token = 'test-admin-token') {
     process.env.ADMIN_TOKEN = token;
+    process.env.READ_ONLY_ADMIN_TOKEN = 'test-read-only-token';
     process.env.NODE_ENV = 'production';
     process.env.DATABASE_URL = 'postgresql://logihero:test@localhost:5432/logihero_test';
     delete process.env.RENDER;
@@ -132,6 +133,66 @@ test('cookie session requires CSRF while bearer token does not', async () => {
 
     const bearer = await request(app, { method: 'POST', path: '/admin/write', headers: { authorization: 'Bearer test-admin-token' }, body: {} });
     assert.equal(bearer.status, 200);
+});
+
+test('READ_ONLY bearer admin cannot approve work-time records', async () => {
+    useProductionEnv();
+    clearProjectModules();
+    const app = express();
+    app.use(express.json());
+    app.use(require('../src/routes/work-time.routes'));
+
+    const headers = { authorization: 'Bearer test-read-only-token' };
+    const bulk = await request(app, { method: 'POST', path: '/admin/work-time/bulk/approve', headers, body: { days: [] } });
+    assert.equal(bulk.status, 403);
+
+    const single = await request(app, { method: 'POST', path: '/admin/work-time/11111111-1111-4111-8111-111111111111/approve', headers, body: {} });
+    assert.equal(single.status, 403);
+});
+
+test('READ_ONLY bearer admin cannot use protected write routes', async () => {
+    useProductionEnv();
+    clearProjectModules();
+    const app = express();
+    app.use(express.json());
+    app.use(require('../src/routes/driver.routes').driverProfileRoutes);
+    app.use(require('../src/routes/work-time.routes'));
+    app.use(require('../src/routes/hotel.routes').hotelManagementRoutes);
+
+    const headers = { authorization: 'Bearer test-read-only-token' };
+    const routes = [
+        { path: '/admin/save-driver', body: { name: 'Blocked', email: 'blocked@example.test' } },
+        { path: '/admin/unlink-driver-devices', body: { uuid: '11111111-1111-4111-8111-111111111111' } },
+        { path: '/admin/work-time/11111111-1111-4111-8111-111111111111/correct', body: { start_time: '2026-07-30T08:00:00.000Z', end_time: '2026-07-30T09:00:00.000Z' } },
+        { path: '/admin/save-hotel-record', body: { name: 'Blocked Hotel' } }
+    ];
+
+    for (const route of routes) {
+        const res = await request(app, { method: 'POST', path: route.path, headers, body: route.body });
+        assert.equal(res.status, 403, route.path);
+    }
+});
+
+test('READ_ONLY bearer admin cannot use work-time approval variants', async () => {
+    useProductionEnv();
+    clearProjectModules();
+    const app = express();
+    app.use(express.json());
+    app.use(require('../src/routes/work-time.routes'));
+
+    const headers = { authorization: 'Bearer test-read-only-token' };
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const routes = [
+        { path: `/admin/work-time/${uuid}/reject`, body: {} },
+        { path: `/admin/work-time/${uuid}/request-correction`, body: { reason: 'needs correction' } },
+        { path: '/admin/work-time/bulk/reject', body: { days: [uuid] } },
+        { path: '/admin/work-time/bulk/request-correction', body: { days: [uuid], reason: 'needs correction' } }
+    ];
+
+    for (const route of routes) {
+        const res = await request(app, { method: 'POST', path: route.path, headers, body: route.body });
+        assert.equal(res.status, 403, route.path);
+    }
 });
 
 test('logout destroys the server-side session', async () => {
