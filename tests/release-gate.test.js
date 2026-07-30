@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildCommandInvocation, getSpawnOutcome } = require('../scripts/release-gate');
+const { buildCommandInvocation, classifyRepositoryState, getSpawnOutcome } = require('../scripts/release-gate');
 
 test('Windows cmd files are routed through the Windows command processor', () => {
     const invocation = buildCommandInvocation('npm.cmd', ['run', 'typecheck'], {
@@ -136,5 +136,141 @@ test('spawn failure remains distinguishable from non-zero exit', () => {
         ok: false,
         exitCode: 1,
         errorMessage: 'spawn failed'
+    });
+});
+
+test('repository state classification allows a clean synchronized branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'main',
+        head: 'abc',
+        upstream: 'abc',
+        ahead: 0,
+        behind: 0
+    }), {
+        ok: true,
+        status: 'REPOSITORY_SYNCED',
+        detail: 'ahead=0 behind=0'
+    });
+});
+
+test('repository state classification allows clean ahead-only branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'main',
+        head: 'def',
+        upstream: 'abc',
+        ahead: 1,
+        behind: 0
+    }), {
+        ok: true,
+        status: 'REPOSITORY_AHEAD_OF_UPSTREAM',
+        detail: 'ahead=1'
+    });
+});
+
+test('repository state classification blocks behind-only branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'main',
+        head: 'abc',
+        upstream: 'def',
+        ahead: 0,
+        behind: 2
+    }), {
+        ok: false,
+        status: 'BLOCKED_BEHIND_UPSTREAM',
+        detail: 'behind=2'
+    });
+});
+
+test('repository state classification blocks diverged branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'main',
+        head: 'abc',
+        upstream: 'def',
+        ahead: 1,
+        behind: 2
+    }), {
+        ok: false,
+        status: 'BLOCKED_DIVERGED_FROM_UPSTREAM',
+        detail: 'ahead=1 behind=2'
+    });
+});
+
+test('repository state classification blocks dirty synchronized branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: ['M file'],
+        branch: 'main',
+        head: 'abc',
+        upstream: 'abc',
+        ahead: 0,
+        behind: 0
+    }), {
+        ok: false,
+        status: 'BLOCKED_DIRTY_TREE',
+        detail: 'files=1'
+    });
+});
+
+test('repository state classification blocks dirty ahead branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: ['M file'],
+        branch: 'main',
+        head: 'def',
+        upstream: 'abc',
+        ahead: 1,
+        behind: 0
+    }), {
+        ok: false,
+        status: 'BLOCKED_DIRTY_TREE',
+        detail: 'files=1'
+    });
+});
+
+test('repository state classification blocks missing upstream', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'main',
+        head: 'abc',
+        upstream: '',
+        ahead: 0,
+        behind: 0
+    }), {
+        ok: false,
+        status: 'BLOCKED_MISSING_UPSTREAM',
+        detail: 'head=abc origin=unknown'
+    });
+});
+
+test('repository state classification blocks git command failure', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'main',
+        head: 'abc',
+        upstream: 'abc',
+        ahead: 0,
+        behind: 0,
+        gitOk: false
+    }), {
+        ok: false,
+        status: 'BLOCKED_GIT_STATE_UNAVAILABLE',
+        detail: 'git command failed'
+    });
+});
+
+test('repository state classification blocks non-main branch', () => {
+    assert.deepEqual(classifyRepositoryState({
+        dirty: [],
+        branch: 'feature',
+        head: 'abc',
+        upstream: 'abc',
+        ahead: 0,
+        behind: 0
+    }), {
+        ok: false,
+        status: 'BLOCKED_NON_MAIN_BRANCH',
+        detail: 'branch=feature'
     });
 });

@@ -76,6 +76,35 @@ function output(command, args) {
     return (result.stdout || '').trim();
 }
 
+function outputResult(command, args) {
+    const result = spawnCommand(command, args, {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: process.env
+    });
+    return {
+        ok: !result.error && result.status === 0,
+        stdout: (result.stdout || '').trim(),
+        error: result.error?.message || (result.stderr || '').trim()
+    };
+}
+
+function classifyRepositoryState({ dirty = [], branch, head, upstream, ahead, behind, gitOk = true } = {}) {
+    if (dirty.length) return { ok: false, status: 'BLOCKED_DIRTY_TREE', detail: `files=${dirty.length}` };
+    if (!gitOk) return { ok: false, status: 'BLOCKED_GIT_STATE_UNAVAILABLE', detail: 'git command failed' };
+    if (branch !== 'main') return { ok: false, status: 'BLOCKED_NON_MAIN_BRANCH', detail: `branch=${branch || 'unknown'}` };
+    if (!head || !upstream) return { ok: false, status: 'BLOCKED_MISSING_UPSTREAM', detail: `head=${head || 'unknown'} origin=${upstream || 'unknown'}` };
+    const aheadCount = Number(ahead);
+    const behindCount = Number(behind);
+    if (!Number.isInteger(aheadCount) || !Number.isInteger(behindCount) || aheadCount < 0 || behindCount < 0) {
+        return { ok: false, status: 'BLOCKED_GIT_STATE_UNAVAILABLE', detail: 'invalid ahead/behind counts' };
+    }
+    if (behindCount > 0 && aheadCount > 0) return { ok: false, status: 'BLOCKED_DIVERGED_FROM_UPSTREAM', detail: `ahead=${aheadCount} behind=${behindCount}` };
+    if (behindCount > 0) return { ok: false, status: 'BLOCKED_BEHIND_UPSTREAM', detail: `behind=${behindCount}` };
+    if (aheadCount > 0) return { ok: true, status: 'REPOSITORY_AHEAD_OF_UPSTREAM', detail: `ahead=${aheadCount}` };
+    return { ok: true, status: 'REPOSITORY_SYNCED', detail: 'ahead=0 behind=0' };
+}
+
 function assertCleanTree() {
     const dirty = output('git', ['status', '--short'])
         .split(/\r?\n/)
@@ -88,12 +117,25 @@ function assertCleanTree() {
 }
 
 function assertMainSynced() {
-    const branch = output('git', ['branch', '--show-current']);
-    const head = output('git', ['rev-parse', 'HEAD']);
-    const origin = output('git', ['rev-parse', 'origin/main']);
-    if (branch !== 'main' || head !== origin) {
-        console.error(`[RELEASE_GATE] status=BLOCKED_DIRTY_TREE branch=${branch} head=${head} origin=${origin}`);
+    const branchResult = outputResult('git', ['branch', '--show-current']);
+    const headResult = outputResult('git', ['rev-parse', 'HEAD']);
+    const originResult = outputResult('git', ['rev-parse', 'origin/main']);
+    const countsResult = outputResult('git', ['rev-list', '--left-right', '--count', 'HEAD...origin/main']);
+    const [ahead, behind] = countsResult.stdout.split(/\s+/).map(Number);
+    const state = classifyRepositoryState({
+        branch: branchResult.stdout,
+        head: headResult.stdout,
+        upstream: originResult.stdout,
+        ahead,
+        behind,
+        gitOk: branchResult.ok && headResult.ok && originResult.ok && countsResult.ok
+    });
+    if (!state.ok) {
+        console.error(`[RELEASE_GATE] status=${state.status} ${state.detail}`);
         process.exit(1);
+    }
+    if (state.status === 'REPOSITORY_AHEAD_OF_UPSTREAM') {
+        console.warn(`[RELEASE_GATE] status=${state.status} ${state.detail}`);
     }
 }
 
@@ -154,6 +196,7 @@ if (require.main === module) {
 
 module.exports = {
     buildCommandInvocation,
+    classifyRepositoryState,
     getSpawnOutcome,
     run,
     spawnCommand
