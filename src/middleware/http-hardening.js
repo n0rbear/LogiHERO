@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const ndp = require('../integrations/ndp-client');
 
 function requestIdMiddleware(req, res, next) {
     const incoming = req.headers['x-request-id'];
@@ -37,12 +38,29 @@ function logSafeError(req, err) {
     console.error(`[ERROR] requestId=${req.requestId || 'unknown'} route=${req.originalUrl || req.url} method=${req.method} status=${status} environment=${process.env.NODE_ENV || 'development'} commit=${process.env.APP_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'unknown'} message=${message}`);
 }
 
+function trackServerError(req, status) {
+    ndp.trackEvent({
+        traceId: req.requestId || ndp.getTraceId(req),
+        eventType: 'backend_request_failed',
+        severity: status >= 500 ? 'ERROR' : 'WARNING',
+        title: 'Backend request failed',
+        component: 'backend',
+        payload: {
+            route: req.originalUrl || req.url,
+            method: req.method,
+            status,
+            requestId: req.requestId || 'unknown'
+        }
+    });
+}
+
 function errorHandler(err, req, res, next) {
     if (res.headersSent) return next(err);
     const status = Number(err.status || err.statusCode || 500);
     const safeStatus = status >= 400 && status < 600 ? status : 500;
     const requestId = req.requestId || 'unknown';
     logSafeError(req, err);
+    trackServerError(req, safeStatus);
 
     if ((req.headers.accept || '').includes('text/html') && !req.originalUrl.startsWith('/api/')) {
         return res.status(safeStatus).send(`
