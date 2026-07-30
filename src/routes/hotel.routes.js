@@ -16,6 +16,26 @@ const numberOrNull = (value) => {
     return Number.isFinite(parsed) ? parsed : null;
 };
 
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
+
+async function validateTourId(poolOrClient, value) {
+    if (value === undefined) return { provided: false, value: undefined };
+    if (value === null || value === '') return { provided: true, value: null };
+    const tourId = Number(value);
+    if (!Number.isInteger(tourId) || tourId <= 0) {
+        const error = new Error('INVALID_TOUR_ID');
+        error.statusCode = 400;
+        throw error;
+    }
+    const result = await poolOrClient.query('SELECT id FROM tours WHERE id = $1 AND deleted_at IS NULL', [tourId]);
+    if (!result.rows[0]) {
+        const error = new Error('TOUR_NOT_FOUND');
+        error.statusCode = 404;
+        throw error;
+    }
+    return { provided: true, value: tourId };
+}
+
 function sanitizeHotel(body) {
     const lat = numberOrNull(body.latitude);
     const lng = numberOrNull(body.longitude);
@@ -73,7 +93,7 @@ hotelReadRoutes.get('/api/tours/:tourId/hotels', async (req, res) => {
     }
 });
 
-hotelManagementRoutes.post('/api/tours/:tourId/hotels', requireAdmin, async (req, res) => {
+hotelManagementRoutes.post('/api/tours/:tourId/hotels', requireAdmin, requireAdminWrite, async (req, res) => {
     const h = sanitizeHotel(req.body);
     const now = Date.now();
     try {
@@ -99,7 +119,7 @@ hotelReadRoutes.get('/api/hotels/:hotelId', async (req, res) => {
     }
 });
 
-hotelManagementRoutes.patch('/api/hotels/:hotelId', requireAdmin, async (req, res) => {
+hotelManagementRoutes.patch('/api/hotels/:hotelId', requireAdmin, requireAdminWrite, async (req, res) => {
     const h = sanitizeHotel(req.body);
     try {
         const result = await pool.query(
@@ -129,7 +149,7 @@ hotelManagementRoutes.patch('/api/hotels/:hotelId', requireAdmin, async (req, re
     }
 });
 
-hotelManagementRoutes.delete('/api/hotels/:hotelId', requireAdmin, async (req, res) => {
+hotelManagementRoutes.delete('/api/hotels/:hotelId', requireAdmin, requireAdminWrite, async (req, res) => {
     try {
         const result = await pool.query(
             'UPDATE hotels SET deleted_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT WHERE id = $1 RETURNING id',
@@ -179,11 +199,13 @@ hotelManagementRoutes.post('/api/hotels/:hotelId/report-problem', async (req, re
 hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, requireAdminWrite, async (req, res) => {
     const { source, id, uuid } = req.body;
     const h = sanitizeHotel(req.body);
+    const tourInput = hasOwn(req.body, 'tour_id') || hasOwn(req.body, 'tourId') ? (req.body.tour_id ?? req.body.tourId) : undefined;
     const now = Date.now();
     if (!h.name) return res.status(400).json({ error: 'A hotelnév kötelező.' });
     if (uuid && !UUID_RE.test(uuid)) return res.status(400).json({ error: 'Hibás hotel UUID.' });
     if (id && !Number.isFinite(Number(id))) return res.status(400).json({ error: 'Hibás hotel ID.' });
     try {
+        const tourId = await validateTourId(pool, tourInput);
         if (source === 'stop') {
             const result = await pool.query(
                 `UPDATE stops SET recipient=$1, address_full=$2, room_number=$3, entry_code=$4, booking_number=$5,
@@ -198,14 +220,19 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, requireAdmi
         }
 
         if (id || uuid) {
+            const tourSetSql = tourId.provided ? ', tour_id=$17' : '';
+            const whereParamIndex = tourId.provided ? 18 : 17;
+            const updateParams = [h.name, h.driverName, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now];
+            if (tourId.provided) updateParams.push(tourId.value);
+            updateParams.push(uuid || id);
             const result = await pool.query(
                 `UPDATE hotels SET name=$1, driver_name=$2, address_line_1=$3, city=$4, latitude=$5, longitude=$6,
                     room_number=$7, entry_code=$8, booking_number=$9, phone=$10, email=$11, notes=$12,
-                    check_in_date=$13, check_out_date=$14, status=$15, updated_at=$16, sync_state='SYNCED', revision=COALESCE(revision,1)+1
-                 WHERE ${uuid ? 'uuid::text = $17' : 'id = $17'}
+                    check_in_date=$13, check_out_date=$14, status=$15, updated_at=$16, sync_state='SYNCED', revision=COALESCE(revision,1)+1${tourSetSql}
+                 WHERE ${uuid ? `uuid::text = $${whereParamIndex}` : `id = $${whereParamIndex}`}
                  RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code,
-                    booking_number, phone as phone_number, email, notes, latitude, longitude, status, updated_at as timestamp`,
-                [h.name, h.driverName, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now, uuid || id]
+                    booking_number, phone as phone_number, email, notes, latitude, longitude, status, tour_id, updated_at as timestamp`,
+                updateParams
             );
             if (!result.rows[0]) return res.status(404).json({ error: 'Hotel nem található.' });
             return res.json({ ...result.rows[0], timestamp: Number(result.rows[0].timestamp || now) });
@@ -216,12 +243,12 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, requireAdmi
                 entry_code, booking_number, phone, email, notes, check_in_date, check_out_date, status, created_at, updated_at, sync_state, revision)
              VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, 'SYNCED', 1)
              RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address_line_1 as address, room_number, entry_code,
-                booking_number, phone as phone_number, email, notes, latitude, longitude, status, updated_at as timestamp`,
-            [h.tourId, h.driverName, h.name, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now]
+                booking_number, phone as phone_number, email, notes, latitude, longitude, status, tour_id, updated_at as timestamp`,
+            [tourId.provided ? tourId.value : h.tourId, h.driverName, h.name, h.addressLine1, h.city, h.latitude, h.longitude, h.roomNumber, h.entryCode, h.bookingNumber, h.phone, h.email, h.notes, h.checkInDate, h.checkOutDate, h.status, now]
         );
         res.json({ ...result.rows[0], timestamp: Number(result.rows[0].timestamp || now) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(e.statusCode || 500).json({ error: e.message });
     }
 });
 

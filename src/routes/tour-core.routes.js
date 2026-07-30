@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
 const TourCore = require('../engines/tour-core-engine');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
@@ -211,7 +212,7 @@ tourCoreRoutes.get('/api/tours/:id', async (req, res) => {
     }
 });
 
-tourCoreRoutes.post('/api/tours', requireAdmin, async (req, res) => {
+tourCoreRoutes.post('/api/tours', requireAdmin, requireAdminWrite, async (req, res) => {
     const traceId = ndp.getTraceId(req);
     const client = await pool.connect();
     try {
@@ -258,7 +259,7 @@ tourCoreRoutes.post('/api/tours', requireAdmin, async (req, res) => {
     }
 });
 
-tourCoreRoutes.patch('/api/tours/:id', requireAdmin, async (req, res) => {
+tourCoreRoutes.patch('/api/tours/:id', requireAdmin, requireAdminWrite, async (req, res) => {
     const client = await pool.connect();
     try {
         const now = Date.now();
@@ -328,7 +329,7 @@ tourCoreRoutes.get('/api/tours/:id/stops', async (req, res) => {
     res.json(data.stops);
 });
 
-tourCoreRoutes.post('/api/tours/:id/stops', requireAdmin, async (req, res) => {
+tourCoreRoutes.post('/api/tours/:id/stops', requireAdmin, requireAdminWrite, async (req, res) => {
     const traceId = ndp.getTraceId(req);
     const client = await pool.connect();
     try {
@@ -353,7 +354,7 @@ tourCoreRoutes.post('/api/tours/:id/stops', requireAdmin, async (req, res) => {
     }
 });
 
-tourCoreRoutes.patch('/api/tours/:id/stops/:stopId', requireAdmin, async (req, res) => {
+tourCoreRoutes.patch('/api/tours/:id/stops/:stopId', requireAdmin, requireAdminWrite, async (req, res) => {
     const traceId = ndp.getTraceId(req);
     const client = await pool.connect();
     try {
@@ -386,7 +387,7 @@ tourCoreRoutes.patch('/api/tours/:id/stops/:stopId', requireAdmin, async (req, r
     }
 });
 
-tourCoreRoutes.delete('/api/tours/:id/stops/:stopId', requireAdmin, async (req, res) => {
+tourCoreRoutes.delete('/api/tours/:id/stops/:stopId', requireAdmin, requireAdminWrite, async (req, res) => {
     const traceId = ndp.getTraceId(req);
     const client = await pool.connect();
     try {
@@ -412,7 +413,7 @@ tourCoreRoutes.delete('/api/tours/:id/stops/:stopId', requireAdmin, async (req, 
     }
 });
 
-tourCoreRoutes.post('/api/tours/:id/stops/reorder', requireAdmin, async (req, res) => {
+tourCoreRoutes.post('/api/tours/:id/stops/reorder', requireAdmin, requireAdminWrite, async (req, res) => {
     const traceId = ndp.getTraceId(req);
     const orderedIds = Array.isArray(req.body?.orderedStopIds) ? req.body.orderedStopIds.map(Number).filter(Number.isFinite) : [];
     if (!orderedIds.length) return res.status(400).json({ error: 'orderedStopIds is required.' });
@@ -458,7 +459,7 @@ tourCoreRoutes.post('/api/tours/:id/stops/reorder', requireAdmin, async (req, re
     }
 });
 
-tourCoreRoutes.post('/api/tours/:id/recalculate-route', requireAdmin, async (req, res) => {
+tourCoreRoutes.post('/api/tours/:id/recalculate-route', requireAdmin, requireAdminWrite, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -574,6 +575,7 @@ tourCoreRoutes.post('/api/tours/:id/stops/:stopId/complete', async (req, res) =>
 const renderAdminLayout = require('../utils/admin-layout');
 
 tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
+    const canWrite = req.adminRole !== 'READ_ONLY';
     const styles = `
         main.tour-main { display: grid; grid-template-columns: 360px 1fr; gap: 24px; height: calc(100vh - 160px); }
         .tour-sidebar { overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
@@ -585,6 +587,9 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
         .metric-item { background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #eee; }
         .metric-label { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; }
         .metric-value { font-size: 16px; font-weight: 700; margin-top: 4px; }
+        .tour-edit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-top:16px; }
+        .tour-stop-row { background:white; border:1px solid var(--color-border); border-radius:8px; padding:12px; margin-bottom:8px; }
+        .route-diagnostic { border:1px solid var(--color-border); border-radius:8px; padding:12px; margin-bottom:12px; background:#f8f9fa; }
         ${renderAdminMapStyles()}
     `;
 
@@ -605,6 +610,8 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                     <div id="tour-metrics" class="metric-grid"></div>
                     <div id="tour-warnings"></div>
                     <p id="tour-next-stop" style="font-weight:600;"></p>
+                    <div id="tour-route-diagnostics" class="route-diagnostic"></div>
+                    <div id="tour-edit-panel"></div>
                 </div>
                 <div id="tour-map"></div>
                 <div id="tour-stops-list"></div>
@@ -620,6 +627,8 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
             let layer = L.layerGroup().addTo(map);
 
             let allTours = [];
+            let selectedTourId = null;
+            const canWriteTour = ${canWrite ? 'true' : 'false'};
             async function loadTours() {
                 try {
                     const r = await fetch('/api/tours');
@@ -652,6 +661,7 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
             const min = s => Math.round(Number(s || 0) / 60) + ' perc';
 
             async function openTour(id) {
+                selectedTourId = id;
                 document.getElementById('tour-details-card').style.display = 'block';
                 const r = await fetch('/api/tours/' + id);
                 const d = await r.json();
@@ -687,6 +697,9 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 const ns = p.nextStop;
                 document.getElementById('tour-next-stop').innerHTML = ns ? '📍 Következő: ' + esc(ns.recipient || ns.company || 'Megálló') : '🏁 Nincs több aktív megálló';
 
+                renderRouteDiagnostics(d, route);
+                renderTourEditPanel(d);
+
                 const bounds = [];
                 if (route.polyline && route.polyline.coordinates) {
                     const latlngs = route.polyline.coordinates.map(c => [c[1], c[0]]);
@@ -704,6 +717,88 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 });
 
                 if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
+            }
+
+            function renderRouteDiagnostics(d, route) {
+                const missing = (d.stops || []).filter(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(Number(s.latitude)) < 0.0001));
+                const status = route && route.status ? String(route.status) : 'NOT_CALCULATED';
+                const error = route && route.error ? '<div style="color:var(--color-error); margin-top:6px;">' + esc(route.error) + '</div>' : '';
+                const button = canWriteTour ? '<button id="route-recalc-button" class="btn btn-outline" onclick="recalculateSelectedRoute()">Route recalculation</button>' : '<span class="badge">Read-only</span>';
+                document.getElementById('tour-route-diagnostics').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px; align-items:center;"><div><b>Route status:</b> ' + esc(status) + '<br><small>Missing coordinates: ' + missing.length + '</small>' + error + '</div>' + button + '</div>';
+            }
+
+            async function recalculateSelectedRoute() {
+                if (!selectedTourId || !canWriteTour) return;
+                const button = document.getElementById('route-recalc-button');
+                if (button) { button.disabled = true; button.textContent = 'Calculating...'; }
+                try {
+                    const res = await fetch('/api/tours/' + selectedTourId + '/recalculate-route', { method:'POST', headers:{ 'x-csrf-token': window.adminCsrfToken } });
+                    const payload = await res.json().catch(async () => ({ error: await res.text() }));
+                    if (!res.ok) throw new Error(payload.error || 'Route recalculation failed.');
+                    showToast('Route updated.');
+                    await openTour(selectedTourId);
+                } catch (err) {
+                    showToast(err.message, 'error');
+                    if (button) { button.disabled = false; button.textContent = 'Route recalculation'; }
+                }
+            }
+
+            function renderTourEditPanel(d) {
+                const t = d.tour || {};
+                const stops = d.stops || [];
+                const writeControls = canWriteTour ? '<form id="tour-basic-form" class="tour-edit-grid"><input name="name" value="' + esc(t.name || '') + '" placeholder="Tour name"><input name="driver_name" value="' + esc(t.driver_name || '') + '" placeholder="Driver"><input name="vehicle" value="' + esc(t.vehicle || '') + '" placeholder="Vehicle"><input name="trailer" value="' + esc(t.trailer || '') + '" placeholder="Trailer"><select name="tour_status"><option>PLANNED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>CANCELLED</option></select><button class="btn btn-primary" type="submit">Save tour</button></form>' : '<div class="badge">Read-only admin</div>';
+                document.getElementById('tour-edit-panel').innerHTML = '<div style="margin-top:16px;"><h4 style="margin-bottom:8px;">Edit foundation</h4>' + writeControls + '<h4 style="margin:16px 0 8px;">Stops</h4><div>' + (stops.map(renderStopRow).join('') || '<div class="tour-stop-row">No stops.</div>') + '</div></div>';
+                const status = document.querySelector('#tour-basic-form [name="tour_status"]');
+                if (status) status.value = t.tour_status || 'PLANNED';
+                document.getElementById('tour-basic-form')?.addEventListener('submit', saveTourBasics);
+            }
+
+            function renderStopRow(s) {
+                const stopId = Number(s.id);
+                const missing = !s.latitude || !s.longitude || Math.abs(Number(s.latitude)) < 0.0001;
+                const action = canWriteTour ? '<button class="btn btn-outline" onclick="saveStopCoordinates('+stopId+')">Save coordinates</button>' : '';
+                return '<div class="tour-stop-row" id="stop-row-'+stopId+'"><div style="display:flex; justify-content:space-between; gap:12px;"><b>'+esc(s.recipient || s.company || s.address_full || 'Stop')+'</b><span class="badge '+(missing?'badge-delayed':'badge-working')+'">'+(missing?'Missing coordinates':esc(s.stop_status || 'PENDING'))+'</span></div><small>'+esc(s.address_full || s.address || '')+'</small><div class="tour-edit-grid"><input name="latitude" value="'+esc(s.latitude || '')+'" placeholder="Latitude" '+(canWriteTour?'':'disabled')+'><input name="longitude" value="'+esc(s.longitude || '')+'" placeholder="Longitude" '+(canWriteTour?'':'disabled')+'>'+action+'</div></div>';
+            }
+
+            async function saveTourBasics(event) {
+                event.preventDefault();
+                if (!selectedTourId || !canWriteTour) return;
+                const form = event.currentTarget;
+                const button = form.querySelector('button[type="submit"]');
+                if (button) button.disabled = true;
+                try {
+                    const data = Object.fromEntries(new FormData(form).entries());
+                    const res = await fetch('/api/tours/' + selectedTourId, { method:'PATCH', headers:{ 'Content-Type':'application/json', 'x-csrf-token': window.adminCsrfToken }, body: JSON.stringify(data) });
+                    const payload = await res.json().catch(async () => ({ error: await res.text() }));
+                    if (!res.ok) throw new Error(payload.error || 'Tour save failed.');
+                    showToast('Tour saved.');
+                    await loadTours();
+                    await openTour(selectedTourId);
+                } catch (err) {
+                    showToast(err.message, 'error');
+                } finally {
+                    if (button) button.disabled = false;
+                }
+            }
+
+            async function saveStopCoordinates(stopId) {
+                if (!selectedTourId || !canWriteTour) return;
+                const row = document.getElementById('stop-row-' + stopId);
+                const latitude = row.querySelector('[name="latitude"]').value;
+                const longitude = row.querySelector('[name="longitude"]').value;
+                const button = row.querySelector('button');
+                if (button) button.disabled = true;
+                try {
+                    const res = await fetch('/api/tours/' + selectedTourId + '/stops/' + stopId, { method:'PATCH', headers:{ 'Content-Type':'application/json', 'x-csrf-token': window.adminCsrfToken }, body: JSON.stringify({ latitude, longitude }) });
+                    const payload = await res.json().catch(async () => ({ error: await res.text() }));
+                    if (!res.ok) throw new Error(payload.error || 'Stop save failed.');
+                    showToast('Stop saved.');
+                    await openTour(selectedTourId);
+                } catch (err) {
+                    showToast(err.message, 'error');
+                } finally {
+                    if (button) button.disabled = false;
+                }
             }
 
             loadTours();

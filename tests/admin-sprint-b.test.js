@@ -14,6 +14,7 @@ function clearProjectModules() {
 
 function useEnv() {
     process.env.ADMIN_TOKEN = 'test-admin-token';
+    process.env.READ_ONLY_ADMIN_TOKEN = 'test-read-only-token';
     process.env.NODE_ENV = 'production';
     process.env.DATABASE_URL = 'postgresql://logihero:test@localhost:5432/logihero_test';
     delete process.env.RENDER;
@@ -70,6 +71,7 @@ function createApp(handler) {
 }
 
 const auth = { authorization: 'Bearer test-admin-token' };
+const readOnlyAuth = { authorization: 'Bearer test-read-only-token' };
 
 test('Driver new page renders a real form instead of a placeholder', async () => {
     const app = createApp(async () => ({ rows: [] }));
@@ -147,13 +149,17 @@ test('Driver cookie-based create requires CSRF', async () => {
 test('Hotel page renders list, filters, edit modal, map hooks, and escaped data', async () => {
     const app = createApp(async (sql) => {
         if (sql.includes('FROM drivers')) return { rows: [{ name: '<Driver>' }] };
-        if (sql.includes('FROM hotels')) return { rows: [{ id: 3, uuid: HOTEL_UUID, source: 'hotel', driver_name: '<Driver>', name: '<Hotel>', address: '<Address>', city: 'Budapest', latitude: 47.5, longitude: 19.04, status: 'PLANNED', updated_at: Date.now() }] };
+        if (sql.includes('FROM hotels')) return { rows: [{ id: 3, uuid: HOTEL_UUID, source: 'hotel', driver_name: '<Driver>', name: '<Hotel>', address: '<Address>', city: 'Budapest', latitude: 47.5, longitude: 19.04, status: 'PLANNED', tour_id: 9, tour_name: '<Tour>', updated_at: Date.now() }] };
+        if (sql.includes('FROM tours')) return { rows: [{ id: 9, name: '<Tour>', driver_name: '<Driver>' }] };
         return { rows: [] };
     });
     const res = await request(app, { path: '/admin/hotels', headers: auth });
     assert.equal(res.status, 200);
     assert.match(res.text, /hotel-search/);
     assert.match(res.text, /hotel-map/);
+    assert.match(res.text, /hotel-tour/);
+    assert.match(res.text, /Linked tour/);
+    assert.match(res.text, /Standalone\/manual hotel/);
     assert.match(res.text, /openHotelModal/);
     assert.match(res.text, /\\u003cHotel>/);
 });
@@ -178,6 +184,37 @@ test('Hotel save validates input and persists rich fields with CSRF-capable rout
     assert.ok(calls.some(c => c.sql.includes('latitude=$5') && c.params.includes('CONFIRMED')));
 });
 
+test('Hotel update preserves existing tour ownership when tour_id is omitted', async () => {
+    const calls = [];
+    const app = createApp(async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('UPDATE hotels SET')) return { rows: [{ id: 3, uuid: HOTEL_UUID, tour_id: 7, timestamp: Date.now() }] };
+        return { rows: [] };
+    });
+    const res = await request(app, {
+        method: 'POST',
+        path: '/admin/save-hotel-record',
+        headers: auth,
+        body: { id: 3, name: 'Hotel', driver_name: 'Driver', address_line_1: 'Address', status: 'PLANNED' }
+    });
+    assert.equal(res.status, 200);
+    const update = calls.find(c => c.sql.includes('UPDATE hotels SET'));
+    assert.ok(update);
+    assert.equal(update.sql.includes('tour_id=$17'), false);
+    assert.match(update.sql, /WHERE id = \$17/);
+});
+
+test('Hotel tour ownership validation rejects malformed and unknown tour IDs', async () => {
+    const app = createApp(async (sql) => {
+        if (sql.includes('SELECT id FROM tours')) return { rows: [] };
+        return { rows: [] };
+    });
+    const malformed = await request(app, { method: 'POST', path: '/admin/save-hotel-record', headers: auth, body: { id: 3, name: 'Hotel', tour_id: 'abc' } });
+    assert.equal(malformed.status, 400);
+    const unknown = await request(app, { method: 'POST', path: '/admin/save-hotel-record', headers: auth, body: { id: 3, name: 'Hotel', tour_id: '999' } });
+    assert.equal(unknown.status, 404);
+});
+
 test('Hotel cookie save requires CSRF', async () => {
     const app = createApp(async () => ({ rows: [] }));
     const { createAdminSession } = require('../src/utils/admin-session');
@@ -194,4 +231,29 @@ test('Tour admin regression keeps the legacy rich route visible', async () => {
     assert.match(res.text, /tour-details-card/);
     assert.match(res.text, /tour-cargo-summary/);
     assert.match(res.text, /tour-map/);
+    assert.match(res.text, /tour-route-diagnostics/);
+    assert.match(res.text, /route-recalc-button/);
+    assert.match(res.text, /saveStopCoordinates/);
+});
+
+test('Tour admin hides write capability for read-only admins', async () => {
+    const app = createApp(async () => ({ rows: [] }));
+    const res = await request(app, { path: '/admin/tours', headers: readOnlyAuth });
+    assert.equal(res.status, 200);
+    assert.match(res.text, /const canWriteTour = false/);
+});
+
+test('Tour core write routes reject READ_ONLY direct requests', async () => {
+    const app = createApp(async () => ({ rows: [] }));
+    const routes = [
+        { method: 'PATCH', path: '/api/tours/1', body: { name: 'Blocked' } },
+        { method: 'POST', path: '/api/tours/1/stops', body: { recipient: 'Blocked' } },
+        { method: 'PATCH', path: '/api/tours/1/stops/2', body: { latitude: 47.5, longitude: 19.04 } },
+        { method: 'POST', path: '/api/tours/1/stops/reorder', body: { orderedStopIds: [2] } },
+        { method: 'POST', path: '/api/tours/1/recalculate-route', body: {} }
+    ];
+    for (const route of routes) {
+        const res = await request(app, { ...route, headers: readOnlyAuth });
+        assert.equal(res.status, 403, route.path);
+    }
 });

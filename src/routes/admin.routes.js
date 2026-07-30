@@ -552,22 +552,27 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
     try {
         const canWrite = req.adminRole !== 'READ_ONLY';
         const drivers = (await pool.query('SELECT name FROM drivers WHERE is_active = true ORDER BY name ASC')).rows;
+        const tours = (await pool.query('SELECT id, name, driver_name FROM tours WHERE deleted_at IS NULL ORDER BY name ASC')).rows;
         const hotels = (await pool.query(`
-            SELECT id, uuid::TEXT, 'hotel'::TEXT AS source, driver_name, name,
+            SELECT h.id, h.uuid::TEXT, 'hotel'::TEXT AS source, h.driver_name, h.name,
                    COALESCE(address_line_1, address) AS address, address_line_1, city, country,
                    latitude, longitude, phone, email, room_number, entry_code, booking_number,
-                   check_in_date, check_out_date, status, notes, updated_at
-            FROM hotels
-            WHERE deleted_at IS NULL
+                   check_in_date, check_out_date, status, h.notes, h.updated_at,
+                   h.tour_id, t.name AS tour_name
+            FROM hotels h
+            LEFT JOIN tours t ON t.id = h.tour_id AND t.deleted_at IS NULL
+            WHERE h.deleted_at IS NULL
             UNION ALL
-            SELECT id, uuid::TEXT, 'stop'::TEXT AS source, NULL::TEXT AS driver_name,
+            SELECT s.id, s.uuid::TEXT, 'stop'::TEXT AS source, NULL::TEXT AS driver_name,
                    COALESCE(recipient, address_full) AS name, address_full AS address,
-                   address_full AS address_line_1, city, country, latitude, longitude,
-                   phone_number AS phone, email, room_number, entry_code, booking_number,
-                   stop_date::TEXT AS check_in_date, NULL::TEXT AS check_out_date,
-                   stop_status AS status, notes, updated_at
-            FROM stops
-            WHERE deleted_at IS NULL AND stop_type = 'HOTEL'
+                   address_full AS address_line_1, s.city, s.country, s.latitude, s.longitude,
+                   s.phone_number AS phone, s.email, s.room_number, s.entry_code, s.booking_number,
+                   s.stop_date::TEXT AS check_in_date, NULL::TEXT AS check_out_date,
+                   s.stop_status AS status, s.notes, s.updated_at,
+                   s.tour_id, t.name AS tour_name
+            FROM stops s
+            LEFT JOIN tours t ON t.id = s.tour_id AND t.deleted_at IS NULL
+            WHERE s.deleted_at IS NULL AND s.stop_type = 'HOTEL'
             ORDER BY updated_at DESC NULLS LAST
         `)).rows;
         const styles = `
@@ -583,6 +588,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
             ${renderAdminMapStyles()}
         `;
         const driverOptions = drivers.map(d => `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('');
+        const tourOptions = tours.map(t => `<option value="${escapeHtml(String(t.id))}">${escapeHtml(t.name || `#${t.id}`)}${t.driver_name ? ` - ${escapeHtml(t.driver_name)}` : ''}</option>`).join('');
         const content = `
             <div class="hotel-main">
                 <div class="hotel-sidebar">
@@ -593,6 +599,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                             <select id="hotel-status" onchange="renderHotels()">
                                 <option value="">Minden státusz</option><option>PLANNED</option><option>BOOKED</option><option>CONFIRMED</option><option>CHECKED_IN</option><option>CHECKED_OUT</option><option>CANCELLED</option><option>PROBLEM</option>
                             </select>
+                            <select id="hotel-tour" onchange="renderHotels()"><option value="">Minden tĂşra</option><option value="__standalone">Standalone/manual hotel</option>${tourOptions}</select>
                             <input id="hotel-date" type="date" onchange="renderHotels()">
                         </div>
                     </div>
@@ -613,6 +620,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                         <input type="hidden" name="source">
                         <input type="hidden" name="id">
                         <input type="hidden" name="uuid">
+                        <input type="hidden" name="tour_id">
                         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px;">
                             ${input('Hotel név', 'name', '', 'text', 'required')}
                             ${input('Sofőr', 'driver_name')}
@@ -642,6 +650,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
             ${renderAdminMapScript()}
             <script>
                 const hotels = ${scriptJson(hotels)};
+                const tours = ${scriptJson(tours)};
                 const map = L.map('hotel-map').setView([47.5, 19.04], 7);
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: 'OSM' }).addTo(map);
                 const layer = L.layerGroup().addTo(map);
@@ -651,16 +660,24 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                     const q = document.getElementById('hotel-search').value.toLowerCase();
                     const driver = document.getElementById('hotel-driver').value;
                     const status = document.getElementById('hotel-status').value;
+                    const tour = document.getElementById('hotel-tour').value;
                     const date = document.getElementById('hotel-date').value;
                     return hotels.filter(h => {
                         const hay = [h.name, h.address, h.city, h.driver_name].join(' ').toLowerCase();
-                        return (!q || hay.includes(q)) && (!driver || h.driver_name === driver) && (!status || h.status === status) && (!date || h.check_in_date === date || h.check_out_date === date);
+                        const tourMatch = !tour || (tour === '__standalone' ? !h.tour_id : String(h.tour_id) === tour);
+                        return (!q || hay.includes(q)) && (!driver || h.driver_name === driver) && (!status || h.status === status) && tourMatch && (!date || h.check_in_date === date || h.check_out_date === date);
                     });
+                }
+                function hotelOwnershipLabel(h) {
+                    return h.tour_id ? 'Linked tour: ' + esc(h.tour_name || ('#' + h.tour_id)) : 'Standalone/manual hotel';
                 }
                 function renderHotels() {
                     const list = document.getElementById('hotel-list');
                     const rows = filteredHotels();
-                    list.innerHTML = rows.map(h => '<div class="hotel-card '+(hotelKey(h)===selectedId?'active':'')+'" onclick="selectHotel(\\''+hotelKey(h)+'\\')"><div style="display:flex; justify-content:space-between; gap:12px;"><b>'+esc(h.name || '')+'</b><span class="badge badge-working">'+esc(h.status || 'PLANNED')+'</span></div><div class="meta">'+esc(h.address || h.city || '')+'</div><div class="meta">Sofőr: '+esc(h.driver_name || '—')+'</div></div>').join('') || '<div class="card">Nincs találat.</div>';
+                    list.innerHTML = rows.map(h => {
+                        const key = hotelKey(h);
+                        return '<div class="hotel-card '+(key===selectedId?'active':'')+'" data-key="'+esc(key)+'" onclick="selectHotel(this.dataset.key)"><div style="display:flex; justify-content:space-between; gap:12px;"><b>'+esc(h.name || '')+'</b><span class="badge badge-working">'+esc(h.status || 'PLANNED')+'</span></div><div class="meta">'+esc(h.address || h.city || '')+'</div><div class="meta">Sofor: '+esc(h.driver_name || '-')+'</div><div class="meta">'+hotelOwnershipLabel(h)+'</div></div>';
+                    }).join('') || '<div class="card">Nincs talalat.</div>';
                     renderMarkers(rows);
                 }
                 function renderMarkers(rows) {
@@ -680,13 +697,14 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
                     const h = hotels.find(item => hotelKey(item) === key);
                     if (!h) return;
                     const editButton = window.isReadOnlyAdmin ? '<span class="badge">Read-only</span>' : '<button class="btn btn-primary" onclick="openHotelModal(\\''+key+'\\')">Szerkesztés</button>';
-                    document.getElementById('hotel-detail').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px;"><h3 style="margin-top:0;">'+esc(h.name || '')+'</h3>'+editButton+'</div><p>'+esc(h.address || '')+'</p><p><b>Koordináták:</b> '+esc(h.latitude || '—')+', '+esc(h.longitude || '—')+'</p><p><b>Telefon:</b> '+esc(h.phone || '—')+' &nbsp; <b>Email:</b> '+esc(h.email || '—')+'</p><p><b>Megjegyzés:</b> '+esc(h.notes || '—')+'</p>' + (h.latitude && h.longitude ? '<a class="btn btn-outline" target="_blank" href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(h.latitude+','+h.longitude)+'">Google Maps</a>' : '');
+                    const tourLink = h.tour_id ? '<a class="btn btn-outline" href="/admin/tours#tour-'+encodeURIComponent(h.tour_id)+'">Related tour</a>' : '<span class="badge">No tour assigned</span>';
+                    document.getElementById('hotel-detail').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px;"><h3 style="margin-top:0;">'+esc(h.name || '')+'</h3>'+editButton+'</div><p>'+esc(h.address || '')+'</p><p><b>Tour:</b> '+hotelOwnershipLabel(h)+'</p><p><b>Coordinates:</b> '+esc(h.latitude || '-')+', '+esc(h.longitude || '-')+'</p><p><b>Phone:</b> '+esc(h.phone || '-')+' &nbsp; <b>Email:</b> '+esc(h.email || '-')+'</p><p><b>Note:</b> '+esc(h.notes || '-')+'</p><div style="display:flex; gap:8px; flex-wrap:wrap;">' + tourLink + (h.latitude && h.longitude ? '<a class="btn btn-outline" target="_blank" href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(h.latitude+','+h.longitude)+'">Google Maps</a>' : '') + '</div>';
                     renderHotels();
                 }
                 function openHotelModal(key) {
                     const h = hotels.find(item => hotelKey(item) === key);
                     const form = document.getElementById('hotel-form');
-                    ['source','id','uuid','name','driver_name','address_line_1','city','latitude','longitude','phone','email','room_number','entry_code','booking_number','check_in_date','check_out_date','status','notes'].forEach(name => {
+                    ['source','id','uuid','tour_id','name','driver_name','address_line_1','city','latitude','longitude','phone','email','room_number','entry_code','booking_number','check_in_date','check_out_date','status','notes'].forEach(name => {
                         if (form.elements[name]) form.elements[name].value = h[name] ?? (name === 'address_line_1' ? h.address || '' : '');
                     });
                     document.getElementById('hotel-modal').classList.add('open');
