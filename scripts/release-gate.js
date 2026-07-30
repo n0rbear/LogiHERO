@@ -4,18 +4,59 @@ const fs = require('node:fs');
 const releaseMode = process.argv.includes('--release') || process.env.RELEASE_GATE_MODE === 'release';
 const includeAndroidConnected = process.argv.includes('--connected-android') || process.env.RELEASE_GATE_CONNECTED_ANDROID === 'true';
 
-function run(label, command, args, options = {}) {
-    console.log(`[RELEASE_GATE] start ${label}`);
-    const result = spawnSync(command, args, {
-        stdio: 'inherit',
+function buildCommandInvocation(command, args = [], options = {}) {
+    const platform = options.platform || process.platform;
+    const env = options.env || process.env;
+    const isWindowsCmd = platform === 'win32' && /\.cmd$/i.test(command);
+    if (!isWindowsCmd) {
+        return { command, args };
+    }
+
+    const shellCommand = env.ComSpec || env.COMSPEC || 'cmd.exe';
+    return {
+        command: shellCommand,
+        args: ['/d', '/s', '/c', command, ...args]
+    };
+}
+
+function spawnCommand(command, args, options = {}) {
+    const invocation = buildCommandInvocation(command, args, { env: options.env });
+    return spawnSync(invocation.command, invocation.args, {
+        stdio: options.stdio,
+        encoding: options.encoding,
         shell: false,
-        env: { ...process.env, ...options.env },
+        env: options.env,
         windowsHide: true
     });
+}
+
+function getSpawnOutcome(result) {
+    if (result.error) {
+        return { ok: false, exitCode: 1, errorMessage: result.error.message };
+    }
     if (result.status !== 0) {
+        return { ok: false, exitCode: result.status || 1, errorMessage: '' };
+    }
+    return { ok: true, exitCode: 0, errorMessage: '' };
+}
+
+function run(label, command, args, options = {}) {
+    console.log(`[RELEASE_GATE] start ${label}`);
+    const env = { ...process.env, ...options.env };
+    const result = spawnCommand(command, args, {
+        stdio: 'inherit',
+        env
+    });
+    const outcome = getSpawnOutcome(result);
+    if (outcome.errorMessage) {
+        const status = options.blockStatus || 'BLOCKED_TEST_FAILURE';
+        console.error(`[RELEASE_GATE] status=${status} failed=${label} error=${outcome.errorMessage}`);
+        process.exit(outcome.exitCode);
+    }
+    if (!outcome.ok) {
         const status = options.blockStatus || 'BLOCKED_TEST_FAILURE';
         console.error(`[RELEASE_GATE] status=${status} failed=${label}`);
-        process.exit(result.status || 1);
+        process.exit(outcome.exitCode);
     }
     console.log(`[RELEASE_GATE] ok ${label}`);
 }
@@ -24,7 +65,15 @@ const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const gradleCmd = process.platform === 'win32' ? '.\\gradlew.bat' : './gradlew';
 
 function output(command, args) {
-    return spawnSync(command, args, { encoding: 'utf8', shell: false, windowsHide: true }).stdout.trim();
+    const result = spawnCommand(command, args, {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: process.env
+    });
+    if (result.error) {
+        return '';
+    }
+    return (result.stdout || '').trim();
 }
 
 function assertCleanTree() {
@@ -62,37 +111,50 @@ function assertForbiddenFiles() {
     }
 }
 
-assertCleanTree();
-assertMainSynced();
-assertForbiddenFiles();
+function main() {
+    assertCleanTree();
+    assertMainSynced();
+    assertForbiddenFiles();
 
-run('diff-check', 'git', ['diff', '--check']);
-run('secret-scan', process.execPath, ['scripts/secret-scan.js']);
-run('typecheck', npmCmd, ['run', 'typecheck']);
-run('unit', npmCmd, ['test']);
-run('integration', npmCmd, ['run', 'test:integration']);
-run('e2e-headless', npmCmd, ['run', 'test:e2e']);
-run('android-jvm', gradleCmd, ['test']);
-run('migration-check', process.execPath, ['scripts/migration-check.js']);
+    run('diff-check', 'git', ['diff', '--check']);
+    run('secret-scan', process.execPath, ['scripts/secret-scan.js']);
+    run('typecheck', npmCmd, ['run', 'typecheck']);
+    run('unit', npmCmd, ['test']);
+    run('integration', npmCmd, ['run', 'test:integration']);
+    run('e2e-headless', npmCmd, ['run', 'test:e2e']);
+    run('android-jvm', gradleCmd, ['test']);
+    run('migration-check', process.execPath, ['scripts/migration-check.js']);
 
-if (process.env.RESTORE_FILE && process.env.RESTORE_DATABASE_URL) {
-    run('restore-drill', process.execPath, ['scripts/db-restore.js'], { blockStatus: 'BLOCKED_BACKUP_RESTORE' });
-} else {
-    console.warn('[RELEASE_GATE] restore-drill skipped; set RESTORE_FILE and RESTORE_DATABASE_URL to enforce');
+    if (process.env.RESTORE_FILE && process.env.RESTORE_DATABASE_URL) {
+        run('restore-drill', process.execPath, ['scripts/db-restore.js'], { blockStatus: 'BLOCKED_BACKUP_RESTORE' });
+    } else {
+        console.warn('[RELEASE_GATE] restore-drill skipped; set RESTORE_FILE and RESTORE_DATABASE_URL to enforce');
+    }
+
+    if (includeAndroidConnected) {
+        run('android-connected', 'powershell', ['-ExecutionPolicy', 'Bypass', '-File', 'scripts\\android-connected-test.ps1', '-UseRunningDevice', '-GradleTask', 'connectedAndroidTest']);
+    }
+
+    if (releaseMode && !process.env.PRODUCTION_SMOKE_ADMIN_TOKEN) {
+        console.error('[RELEASE_GATE] status=BLOCKED_MISSING_PRODUCTION_CREDENTIAL');
+        process.exit(1);
+    }
+
+    run('production-smoke', npmCmd, ['run', 'smoke:production'], {
+        blockStatus: 'BLOCKED_PRODUCTION_SMOKE',
+        env: releaseMode ? {} : { SMOKE_ALLOW_PARTIAL: process.env.SMOKE_ALLOW_PARTIAL || 'true' }
+    });
+
+    console.log(`[RELEASE_GATE] status=${releaseMode ? 'RELEASE_READY' : 'RELEASE_READY_WITH_EXTERNAL_MONITORING_SETUP'}`);
 }
 
-if (includeAndroidConnected) {
-    run('android-connected', 'powershell', ['-ExecutionPolicy', 'Bypass', '-File', 'scripts\\android-connected-test.ps1', '-UseRunningDevice', '-GradleTask', 'connectedAndroidTest']);
+if (require.main === module) {
+    main();
 }
 
-if (releaseMode && !process.env.PRODUCTION_SMOKE_ADMIN_TOKEN) {
-    console.error('[RELEASE_GATE] status=BLOCKED_MISSING_PRODUCTION_CREDENTIAL');
-    process.exit(1);
-}
-
-run('production-smoke', npmCmd, ['run', 'smoke:production'], {
-    blockStatus: 'BLOCKED_PRODUCTION_SMOKE',
-    env: releaseMode ? {} : { SMOKE_ALLOW_PARTIAL: process.env.SMOKE_ALLOW_PARTIAL || 'true' }
-});
-
-console.log(`[RELEASE_GATE] status=${releaseMode ? 'RELEASE_READY' : 'RELEASE_READY_WITH_EXTERNAL_MONITORING_SETUP'}`);
+module.exports = {
+    buildCommandInvocation,
+    getSpawnOutcome,
+    run,
+    spawnCommand
+};
