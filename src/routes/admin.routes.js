@@ -557,7 +557,7 @@ adminRoutes.get('/hotels', requireAdmin, async (req, res) => {
             SELECT h.id, h.uuid::TEXT, 'hotel'::TEXT AS source, h.driver_name, h.name,
                    COALESCE(address_line_1, address) AS address, address_line_1, city, country,
                    latitude, longitude, phone, email, room_number, entry_code, booking_number,
-                   check_in_date, check_out_date, status, h.notes, h.updated_at,
+                   check_in_date, check_out_date, h.status AS status, h.notes, h.updated_at,
                    h.tour_id, t.name AS tour_name
             FROM hotels h
             LEFT JOIN tours t ON t.id = h.tour_id AND t.deleted_at IS NULL

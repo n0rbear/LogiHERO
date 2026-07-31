@@ -164,6 +164,33 @@ test('Hotel page renders list, filters, edit modal, map hooks, and escaped data'
     assert.match(res.text, /\\u003cHotel>/);
 });
 
+test('Hotel admin query qualifies joined status columns for filter variants', async () => {
+    const app = createApp(async (sql) => {
+        if (sql.includes('FROM drivers')) return { rows: [{ name: 'Driver' }] };
+        if (sql.includes('FROM tours')) return { rows: [{ id: 9, name: 'Tour', driver_name: 'Driver' }] };
+        if (sql.includes('FROM hotels h')) {
+            if (/check_out_date,\s*status,/i.test(sql)) {
+                throw new Error('column reference "status" is ambiguous');
+            }
+            return {
+                rows: [
+                    { id: 3, uuid: HOTEL_UUID, source: 'hotel', driver_name: 'Driver', name: 'Hotel', address: 'Address', city: 'Budapest', latitude: 47.5, longitude: 19.04, status: 'PLANNED', tour_id: 9, tour_name: 'Tour', updated_at: Date.now() },
+                    { id: 4, uuid: '11111111-1111-4111-8111-111111111111', source: 'hotel', driver_name: 'Driver', name: 'Standalone Hotel', address: 'Address', city: 'Budapest', latitude: 47.6, longitude: 19.05, status: 'CONFIRMED', tour_id: null, tour_name: null, updated_at: Date.now() },
+                    { id: 5, uuid: '22222222-2222-4222-8222-222222222222', source: 'stop', driver_name: null, name: 'Tour Stop Hotel', address: 'Address', city: 'Budapest', latitude: 47.7, longitude: 19.06, status: 'BOOKED', tour_id: 9, tour_name: 'Tour', updated_at: Date.now() }
+                ]
+            };
+        }
+        return { rows: [] };
+    });
+    const res = await request(app, { path: '/admin/hotels', headers: auth });
+    assert.equal(res.status, 200);
+    assert.match(res.text, /hotel-status/);
+    assert.match(res.text, /hotel-driver/);
+    assert.match(res.text, /hotel-tour/);
+    assert.match(res.text, /Standalone\/manual hotel/);
+    assert.match(res.text, /Linked tour/);
+});
+
 test('Hotel save validates input and persists rich fields with CSRF-capable route', async () => {
     const calls = [];
     const app = createApp(async (sql, params) => {
