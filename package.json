@@ -19,7 +19,7 @@
     "release:gate": "node scripts/release-gate.js",
     "release:gate:release": "node scripts/release-gate.js --release",
     "start": "node server.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node scripts/run-node-suite.js",
     "test:integration": "node --test tests/hotel.test.js",
     "test:e2e": "npm run db:init && npm run db:seed && node scripts/run-e2e.js",
     "test:e2e:headed": "npm run db:init && npm run db:seed && node scripts/run-e2e.js --headed",

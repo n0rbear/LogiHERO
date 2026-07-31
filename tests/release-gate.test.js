@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { buildCommandInvocation, classifyRepositoryState, getSpawnOutcome } = require('../scripts/release-gate');
+const { isProjectNodeTest, hasGeneratedSegment } = require('../scripts/run-node-suite');
 
 test('Windows cmd files are routed through the Windows command processor', () => {
     const invocation = buildCommandInvocation('npm.cmd', ['run', 'typecheck'], {
@@ -273,4 +274,25 @@ test('repository state classification blocks non-main branch', () => {
         status: 'BLOCKED_NON_MAIN_BRANCH',
         detail: 'branch=feature'
     });
+});
+
+test('project Node test discovery accepts only intended top-level project tests', () => {
+    assert.equal(isProjectNodeTest('tests/admin-sprint-a.test.js'), true);
+    assert.equal(isProjectNodeTest('tests/release-gate.test.js'), true);
+    assert.equal(isProjectNodeTest('tests/e2e/admin-smoke.spec.js'), false);
+    assert.equal(isProjectNodeTest('scripts/release-gate.js'), false);
+    assert.equal(isProjectNodeTest('src/routes/tour-core.routes.js'), false);
+});
+
+test('project Node test discovery rejects generated build and report JavaScript', () => {
+    assert.equal(hasGeneratedSegment('sdks/android-agent/build/reports/tests/test/js/report.js'), true);
+    assert.equal(isProjectNodeTest('sdks/android-agent/build/reports/tests/test/js/report.js'), false);
+    assert.equal(isProjectNodeTest('build/reports/tests/test/js/browser-report.test.js'), false);
+    assert.equal(isProjectNodeTest('dist/generated/smoke.test.js'), false);
+    assert.equal(isProjectNodeTest('coverage/tmp/report.test.js'), false);
+});
+
+test('project Node test discovery rejects browser-only Android report output', () => {
+    const browserOnlyReport = 'sdks/android-agent/build/reports/tests/test/js/report.js';
+    assert.equal(isProjectNodeTest(browserOnlyReport), false);
 });
