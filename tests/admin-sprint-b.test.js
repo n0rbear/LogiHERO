@@ -233,7 +233,16 @@ test('Tour admin regression keeps the legacy rich route visible', async () => {
     assert.match(res.text, /tour-map/);
     assert.match(res.text, /tour-route-diagnostics/);
     assert.match(res.text, /route-recalc-button/);
-    assert.match(res.text, /saveStopCoordinates/);
+    assert.match(res.text, /dispatcher-stop-table/);
+    assert.match(res.text, /Dispatcher stop table/);
+    assert.match(res.text, /Save changes/);
+    assert.match(res.text, /Add stop/);
+    assert.match(res.text, /data-move="up"/);
+    assert.match(res.text, /data-delete-stop/);
+    assert.match(res.text, /saveDispatcherChanges/);
+    assert.match(res.text, /cancelDispatcherChanges/);
+    assert.match(res.text, /persistStopOrder/);
+    assert.match(res.text, /recalculateSelectedRoute/);
 });
 
 test('Tour admin hides write capability for read-only admins', async () => {
@@ -241,6 +250,8 @@ test('Tour admin hides write capability for read-only admins', async () => {
     const res = await request(app, { path: '/admin/tours', headers: readOnlyAuth });
     assert.equal(res.status, 200);
     assert.match(res.text, /const canWriteTour = false/);
+    assert.match(res.text, /Read-only table/);
+    assert.doesNotMatch(res.text, /READ_ONLY users may write/i);
 });
 
 test('Tour core write routes reject READ_ONLY direct requests', async () => {
@@ -249,6 +260,7 @@ test('Tour core write routes reject READ_ONLY direct requests', async () => {
         { method: 'PATCH', path: '/api/tours/1', body: { name: 'Blocked' } },
         { method: 'POST', path: '/api/tours/1/stops', body: { recipient: 'Blocked' } },
         { method: 'PATCH', path: '/api/tours/1/stops/2', body: { latitude: 47.5, longitude: 19.04 } },
+        { method: 'DELETE', path: '/api/tours/1/stops/2' },
         { method: 'POST', path: '/api/tours/1/stops/reorder', body: { orderedStopIds: [2] } },
         { method: 'POST', path: '/api/tours/1/recalculate-route', body: {} }
     ];
@@ -256,4 +268,92 @@ test('Tour core write routes reject READ_ONLY direct requests', async () => {
         const res = await request(app, { ...route, headers: readOnlyAuth });
         assert.equal(res.status, 403, route.path);
     }
+});
+
+test('Tour dispatcher table renders escaped inline editing surface and batch workflow', async () => {
+    const app = createApp(async (sql) => {
+        if (sql.includes('FROM tours')) {
+            return { rows: [{ id: 1, name: '<Tour>', driver_name: '<Driver>', tour_status: 'PLANNED', planned_distance_km: 12, planned_duration_seconds: 600 }] };
+        }
+        if (sql.includes('FROM stops')) {
+            return { rows: [{
+                id: 2,
+                order_index: 0,
+                stop_type: 'PICKUP',
+                company: '<Company>',
+                address: '<Address>',
+                address_full: '<Full>',
+                city: '<City>',
+                country: '<Country>',
+                latitude: 47.5,
+                longitude: 19.04,
+                stop_status: 'PENDING',
+                notes: '<Notes>'
+            }] };
+        }
+        return { rows: [] };
+    });
+    const res = await request(app, { path: '/admin/tours', headers: auth });
+    assert.equal(res.status, 200);
+    assert.match(res.text, /data-field="company"/);
+    assert.match(res.text, /data-field="address"/);
+    assert.match(res.text, /data-field="city"/);
+    assert.match(res.text, /data-field="country"/);
+    assert.match(res.text, /data-field="latitude"/);
+    assert.match(res.text, /data-field="longitude"/);
+    assert.match(res.text, /data-field="notes"/);
+    assert.match(res.text, /data-field="stop_status"/);
+    assert.match(res.text, /collectStopPayload/);
+    assert.match(res.text, /Stop table saved/);
+    assert.match(res.text, /No unsaved changes/);
+    assert.match(res.text, /row\(s\) with unsaved changes/);
+    assert.doesNotMatch(res.text, /saveStopCoordinates/);
+});
+
+test('Tour stop add, edit, reorder, delete, and recalculate use existing APIs', async () => {
+    const calls = [];
+    const app = createApp(async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 };
+        if (sql.includes('SELECT COALESCE(MAX(order_index)')) return { rows: [{ next: 1 }] };
+        if (sql.includes('SELECT * FROM tours WHERE id')) return { rows: [{ id: 1, name: 'Tour', driver_name: 'Driver', tour_status: 'PLANNED' }] };
+        if (sql.includes('SELECT * FROM stops WHERE tour_id')) {
+            return { rows: [
+                { id: 2, order_index: 0, latitude: 47.5, longitude: 19.04, stop_status: 'PENDING' },
+                { id: 3, order_index: 1, latitude: 48.0, longitude: 20.0, stop_status: 'PENDING' }
+            ] };
+        }
+        if (sql.includes('SELECT * FROM cargo')) return { rows: [] };
+        if (sql.includes('SELECT latitude, longitude, speed')) return { rows: [] };
+        if (sql.includes('INSERT INTO stops')) return { rows: [{ id: 4, tour_id: 1, stop_type: 'PICKUP' }] };
+        if (sql.includes('UPDATE stops SET recipient=COALESCE')) return { rows: [{ id: 2, tour_id: 1 }] };
+        if (sql.includes('UPDATE stops SET deleted_at')) return { rows: [{ id: 3 }] };
+        if (sql.includes('UPDATE stops SET order_index')) return { rows: [], rowCount: 1 };
+        if (sql.includes('SELECT c.id, c.name')) return { rows: [] };
+        if (sql.includes('UPDATE tours SET planned_distance_km')) return { rows: [], rowCount: 1 };
+        if (sql.includes('UPDATE stops SET segment_distance_km')) return { rows: [], rowCount: 1 };
+        if (sql.includes('UPDATE tours SET next_stop_id')) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
+    });
+
+    const edit = await request(app, { method: 'PATCH', path: '/api/tours/1/stops/2', headers: auth, body: { company: 'Updated', address: 'Address', city: 'City', country: 'HU', latitude: '47.5', longitude: '19.04', arrival_time: 1785357000000, actual_departure_time: 1785360600000, notes: 'Note', stop_status: 'PENDING' } });
+    assert.equal(edit.status, 200);
+
+    const add = await request(app, { method: 'POST', path: '/api/tours/1/stops', headers: auth, body: { stop_type: 'PICKUP', company: 'New', address: 'Address', city: 'City' } });
+    assert.equal(add.status, 201);
+
+    const reorder = await request(app, { method: 'POST', path: '/api/tours/1/stops/reorder', headers: auth, body: { orderedStopIds: [3, 2] } });
+    assert.equal(reorder.status, 200);
+
+    const deleted = await request(app, { method: 'DELETE', path: '/api/tours/1/stops/3', headers: auth });
+    assert.equal(deleted.status, 200);
+
+    const recalc = await request(app, { method: 'POST', path: '/api/tours/1/recalculate-route', headers: auth, body: {} });
+    assert.equal(recalc.status, 200);
+
+    assert.ok(calls.some(c => c.sql.includes('INSERT INTO stops')));
+    assert.ok(calls.some(c => c.sql.includes('UPDATE stops SET recipient=COALESCE') && c.sql.includes('arrival_time=COALESCE') && c.params.includes(1785357000000) && c.params.includes(1785360600000)));
+    assert.ok(calls.some(c => c.sql.includes('UPDATE stops SET order_index')));
+    assert.ok(calls.some(c => c.sql.includes('UPDATE stops SET deleted_at')));
+    assert.ok(calls.some(c => c.sql.includes('UPDATE tours SET planned_distance_km')));
 });

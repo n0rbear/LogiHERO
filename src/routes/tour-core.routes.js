@@ -37,6 +37,8 @@ function sanitizeStopPayload(body) {
         order_index: Number.isInteger(Number(body.order_index ?? body.orderIndex)) ? Number(body.order_index ?? body.orderIndex) : null,
         latitude: numberOrNull(body.latitude),
         longitude: numberOrNull(body.longitude),
+        arrival_time: numberOrNull(body.arrival_time || body.arrivalTime || body.arrival),
+        actual_departure_time: numberOrNull(body.actual_departure_time || body.actualDepartureTime || body.departure),
         stop_type: textOrNull(body.stop_type || body.stopType) || 'DELIVERY',
         stop_status: textOrNull(body.stop_status || body.stopStatus) || null
     };
@@ -367,9 +369,10 @@ tourCoreRoutes.patch('/api/tours/:id/stops/:stopId', requireAdmin, requireAdminW
              contact_name=COALESCE($10,contact_name), phone_number=COALESCE($11,phone_number),
              time_window=COALESCE($12,time_window), stop_date=COALESCE($13,stop_date), notes=COALESCE($14,notes),
              latitude=COALESCE($15,latitude), longitude=COALESCE($16,longitude), stop_type=COALESCE($17,stop_type),
-             stop_status=COALESCE($18,stop_status), updated_at=$19
-             WHERE id=$20 AND tour_id=$21 AND deleted_at IS NULL RETURNING *`,
-            [payload.recipient, payload.company, payload.address, payload.street, payload.house_number, payload.postal_code, payload.city, payload.country, payload.address_full, payload.contact_name, payload.phone_number, payload.time_window, payload.stop_date, payload.notes, payload.latitude, payload.longitude, payload.stop_type, payload.stop_status, Date.now(), req.params.stopId, req.params.id]
+             stop_status=COALESCE($18,stop_status), arrival_time=COALESCE($19,arrival_time),
+             actual_departure_time=COALESCE($20,actual_departure_time), updated_at=$21
+             WHERE id=$22 AND tour_id=$23 AND deleted_at IS NULL RETURNING *`,
+            [payload.recipient, payload.company, payload.address, payload.street, payload.house_number, payload.postal_code, payload.city, payload.country, payload.address_full, payload.contact_name, payload.phone_number, payload.time_window, payload.stop_date, payload.notes, payload.latitude, payload.longitude, payload.stop_type, payload.stop_status, payload.arrival_time, payload.actual_departure_time, Date.now(), req.params.stopId, req.params.id]
         );
         if (!updated.rows[0]) {
             await client.query('ROLLBACK');
@@ -590,6 +593,24 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
         .tour-edit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-top:16px; }
         .tour-stop-row { background:white; border:1px solid var(--color-border); border-radius:8px; padding:12px; margin-bottom:8px; }
         .route-diagnostic { border:1px solid var(--color-border); border-radius:8px; padding:12px; margin-bottom:12px; background:#f8f9fa; }
+        .dispatcher-toolbar { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; margin:16px 0 12px; }
+        .dispatcher-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+        .dispatcher-table-wrap { overflow:auto; border:1px solid var(--color-border); border-radius:8px; background:white; max-height:560px; }
+        .dispatcher-table { width:100%; border-collapse:collapse; min-width:1380px; font-size:13px; }
+        .dispatcher-table th { position:sticky; top:0; background:#f8f9fa; color:var(--color-text-muted); text-align:left; z-index:1; border-bottom:1px solid var(--color-border); padding:8px; font-size:11px; text-transform:uppercase; }
+        .dispatcher-table td { border-bottom:1px solid var(--color-border); padding:6px; vertical-align:top; }
+        .dispatcher-table tr.is-dirty { background:#fff8e1; }
+        .dispatcher-table input, .dispatcher-table select, .dispatcher-table textarea { width:100%; min-width:90px; box-sizing:border-box; padding:7px 8px; border:1px solid var(--color-border); border-radius:6px; font:inherit; background:white; }
+        .dispatcher-table textarea { min-height:38px; resize:vertical; }
+        .dispatcher-table input:disabled, .dispatcher-table select:disabled, .dispatcher-table textarea:disabled { background:#f5f6f7; color:var(--color-text-muted); }
+        .dispatcher-order { display:flex; gap:4px; align-items:center; }
+        .dispatcher-status { min-height:22px; color:var(--color-text-muted); font-size:12px; }
+        .dispatcher-error { color:var(--color-error); font-weight:600; }
+        .dispatcher-add-row { display:grid; grid-template-columns:140px repeat(4, minmax(120px,1fr)) auto; gap:8px; align-items:end; margin-top:12px; }
+        @media (max-width: 1100px) {
+            main.tour-main { grid-template-columns:1fr; height:auto; }
+            .dispatcher-add-row { grid-template-columns:1fr 1fr; }
+        }
         ${renderAdminMapStyles()}
     `;
 
@@ -747,17 +768,250 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 const t = d.tour || {};
                 const stops = d.stops || [];
                 const writeControls = canWriteTour ? '<form id="tour-basic-form" class="tour-edit-grid"><input name="name" value="' + esc(t.name || '') + '" placeholder="Tour name"><input name="driver_name" value="' + esc(t.driver_name || '') + '" placeholder="Driver"><input name="vehicle" value="' + esc(t.vehicle || '') + '" placeholder="Vehicle"><input name="trailer" value="' + esc(t.trailer || '') + '" placeholder="Trailer"><select name="tour_status"><option>PLANNED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>CANCELLED</option></select><button class="btn btn-primary" type="submit">Save tour</button></form>' : '<div class="badge">Read-only admin</div>';
-                document.getElementById('tour-edit-panel').innerHTML = '<div style="margin-top:16px;"><h4 style="margin-bottom:8px;">Edit foundation</h4>' + writeControls + '<h4 style="margin:16px 0 8px;">Stops</h4><div>' + (stops.map(renderStopRow).join('') || '<div class="tour-stop-row">No stops.</div>') + '</div></div>';
+                document.getElementById('tour-edit-panel').innerHTML = '<div style="margin-top:16px;"><h4 style="margin-bottom:8px;">Edit foundation</h4>' + writeControls + renderDispatcherStopEditor(stops) + '</div>';
                 const status = document.querySelector('#tour-basic-form [name="tour_status"]');
                 if (status) status.value = t.tour_status || 'PLANNED';
                 document.getElementById('tour-basic-form')?.addEventListener('submit', saveTourBasics);
+                bindDispatcherEditor();
             }
 
-            function renderStopRow(s) {
+            function stopValue(s, name) {
+                if (name === 'arrival') return s.arrival_time || s.arrival || s.planned_arrival_at || '';
+                if (name === 'departure') return s.actual_departure_time || s.departure || s.planned_departure_at || '';
+                if (name === 'hotel') return s.hotel_name || s.hotel || '';
+                if (name === 'status') return s.stop_status || 'PENDING';
+                return s[name] || '';
+            }
+
+            function renderDispatcherStopEditor(stops) {
+                const readOnly = canWriteTour ? '' : ' disabled';
+                const rows = stops.map(renderStopTableRow).join('') || '<tr><td colspan="14" style="text-align:center; color:var(--color-text-muted); padding:20px;">No stops.</td></tr>';
+                const controls = canWriteTour
+                    ? '<div class="dispatcher-actions"><button id="dispatcher-save" class="btn btn-primary" type="button" disabled>Save changes</button><button id="dispatcher-cancel" class="btn btn-outline" type="button" disabled>Cancel</button><button id="dispatcher-add" class="btn btn-outline" type="button">Add stop</button></div>'
+                    : '<span class="badge">Read-only table</span>';
+                const addRow = canWriteTour ? '<div id="dispatcher-add-row" class="dispatcher-add-row" style="display:none;"><label>Stop type<select id="new-stop-type"><option value="PICKUP">pickup</option><option value="DELIVERY">delivery</option><option value="HOTEL">hotel</option><option value="FUEL">fuel</option><option value="OTHER">other</option></select></label><label>Company<input id="new-stop-company" maxlength="120"></label><label>Address<input id="new-stop-address" maxlength="240"></label><label>City<input id="new-stop-city" maxlength="120"></label><label>Country<input id="new-stop-country" maxlength="80"></label><button id="dispatcher-add-confirm" class="btn btn-primary" type="button">Create</button></div>' : '';
+                return '<h4 style="margin:16px 0 8px;">Dispatcher stop table</h4><div class="dispatcher-toolbar"><div><b id="dispatcher-unsaved">No unsaved changes</b><div id="dispatcher-status" class="dispatcher-status"></div></div>' + controls + '</div><div class="dispatcher-table-wrap" id="dispatcher-table-wrap"><table class="dispatcher-table" id="dispatcher-stop-table"><thead><tr><th>Order</th><th>Stop type</th><th>Company</th><th>Address</th><th>City</th><th>Country</th><th>Arrival</th><th>Departure</th><th>Latitude</th><th>Longitude</th><th>Hotel</th><th>Status</th><th>Notes</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + addRow;
+            }
+
+            function renderStopTableRow(s) {
                 const stopId = Number(s.id);
-                const missing = !s.latitude || !s.longitude || Math.abs(Number(s.latitude)) < 0.0001;
-                const action = canWriteTour ? '<button class="btn btn-outline" onclick="saveStopCoordinates('+stopId+')">Save coordinates</button>' : '';
-                return '<div class="tour-stop-row" id="stop-row-'+stopId+'"><div style="display:flex; justify-content:space-between; gap:12px;"><b>'+esc(s.recipient || s.company || s.address_full || 'Stop')+'</b><span class="badge '+(missing?'badge-delayed':'badge-working')+'">'+(missing?'Missing coordinates':esc(s.stop_status || 'PENDING'))+'</span></div><small>'+esc(s.address_full || s.address || '')+'</small><div class="tour-edit-grid"><input name="latitude" value="'+esc(s.latitude || '')+'" placeholder="Latitude" '+(canWriteTour?'':'disabled')+'><input name="longitude" value="'+esc(s.longitude || '')+'" placeholder="Longitude" '+(canWriteTour?'':'disabled')+'>'+action+'</div></div>';
+                const readOnly = canWriteTour ? '' : ' disabled';
+                const actions = canWriteTour
+                    ? '<div class="dispatcher-actions"><button class="btn btn-outline" type="button" data-move="up">Up</button><button class="btn btn-outline" type="button" data-move="down">Down</button><button class="btn btn-outline" type="button" data-delete-stop>Delete</button></div>'
+                    : '<span class="badge">View</span>';
+                return '<tr data-stop-id="' + stopId + '">'
+                    + '<td><div class="dispatcher-order"><span data-order-label>' + esc((Number(s.order_index || 0) + 1)) + '</span></div></td>'
+                    + '<td><select data-field="stop_type"' + readOnly + '>' + stopTypeOptions(stopValue(s, 'stop_type')) + '</select></td>'
+                    + '<td><input data-field="company" value="' + esc(stopValue(s, 'company')) + '" maxlength="120"' + readOnly + '></td>'
+                    + '<td><input data-field="address" value="' + esc(stopValue(s, 'address_full') || stopValue(s, 'address')) + '" maxlength="240"' + readOnly + '></td>'
+                    + '<td><input data-field="city" value="' + esc(stopValue(s, 'city')) + '" maxlength="120"' + readOnly + '></td>'
+                    + '<td><input data-field="country" value="' + esc(stopValue(s, 'country')) + '" maxlength="80"' + readOnly + '></td>'
+                    + '<td><input data-field="arrival" value="' + esc(stopValue(s, 'arrival')) + '" placeholder="YYYY-MM-DD HH:mm"' + readOnly + '></td>'
+                    + '<td><input data-field="departure" value="' + esc(stopValue(s, 'departure')) + '" placeholder="YYYY-MM-DD HH:mm"' + readOnly + '></td>'
+                    + '<td><input data-field="latitude" value="' + esc(stopValue(s, 'latitude')) + '" inputmode="decimal"' + readOnly + '></td>'
+                    + '<td><input data-field="longitude" value="' + esc(stopValue(s, 'longitude')) + '" inputmode="decimal"' + readOnly + '></td>'
+                    + '<td><input data-field="hotel" value="' + esc(stopValue(s, 'hotel')) + '" maxlength="160"' + readOnly + '></td>'
+                    + '<td><select data-field="stop_status"' + readOnly + '>' + statusOptions(stopValue(s, 'status')) + '</select></td>'
+                    + '<td><textarea data-field="notes"' + readOnly + '>' + esc(stopValue(s, 'notes')) + '</textarea></td>'
+                    + '<td>' + actions + '</td>'
+                    + '</tr>';
+            }
+
+            function stopTypeOptions(current) {
+                const values = ['PICKUP','DELIVERY','HOTEL','FUEL','OTHER'];
+                const selected = String(current || 'DELIVERY').toUpperCase();
+                return values.map(v => '<option value="' + v + '"' + (v === selected ? ' selected' : '') + '>' + v.toLowerCase() + '</option>').join('');
+            }
+
+            function statusOptions(current) {
+                const values = ['PENDING','ARRIVED','COMPLETED','SKIPPED','PROBLEM'];
+                const selected = String(current || 'PENDING').toUpperCase();
+                return values.map(v => '<option value="' + v + '"' + (v === selected ? ' selected' : '') + '>' + v + '</option>').join('');
+            }
+
+            function bindDispatcherEditor() {
+                if (!canWriteTour) return;
+                const panel = document.getElementById('tour-edit-panel');
+                panel.querySelectorAll('[data-field]').forEach(input => {
+                    input.dataset.originalValue = input.value;
+                    input.addEventListener('input', markDispatcherDirty);
+                    input.addEventListener('change', markDispatcherDirty);
+                });
+                panel.querySelector('#dispatcher-save')?.addEventListener('click', saveDispatcherChanges);
+                panel.querySelector('#dispatcher-cancel')?.addEventListener('click', cancelDispatcherChanges);
+                panel.querySelector('#dispatcher-add')?.addEventListener('click', () => {
+                    const row = document.getElementById('dispatcher-add-row');
+                    row.style.display = row.style.display === 'none' ? 'grid' : 'none';
+                });
+                panel.querySelector('#dispatcher-add-confirm')?.addEventListener('click', addDispatcherStop);
+                panel.querySelectorAll('[data-move]').forEach(button => button.addEventListener('click', moveDispatcherStop));
+                panel.querySelectorAll('[data-delete-stop]').forEach(button => button.addEventListener('click', deleteDispatcherStop));
+            }
+
+            function markDispatcherDirty(event) {
+                const row = event.target.closest('tr[data-stop-id]');
+                if (row) row.classList.add('is-dirty');
+                updateDispatcherStatus();
+            }
+
+            function updateDispatcherStatus(message, isError) {
+                const dirty = document.querySelectorAll('#dispatcher-stop-table tr.is-dirty').length;
+                const unsaved = document.getElementById('dispatcher-unsaved');
+                const status = document.getElementById('dispatcher-status');
+                const save = document.getElementById('dispatcher-save');
+                const cancel = document.getElementById('dispatcher-cancel');
+                if (unsaved) unsaved.textContent = dirty ? dirty + ' row(s) with unsaved changes' : 'No unsaved changes';
+                if (save) save.disabled = dirty === 0;
+                if (cancel) cancel.disabled = dirty === 0;
+                if (status && message) {
+                    status.textContent = message;
+                    status.className = isError ? 'dispatcher-status dispatcher-error' : 'dispatcher-status';
+                }
+            }
+
+            function collectStopPayload(row) {
+                const data = {};
+                row.querySelectorAll('[data-field]').forEach(input => { data[input.dataset.field] = input.value; });
+                data.address_full = data.address;
+                data.arrival_time = parseDispatcherTime(data.arrival);
+                data.actual_departure_time = parseDispatcherTime(data.departure);
+                data.stop_date = data.arrival_time || data.actual_departure_time || undefined;
+                delete data.arrival;
+                delete data.departure;
+                delete data.hotel;
+                return data;
+            }
+
+            function parseDispatcherTime(value) {
+                if (!value) return undefined;
+                if (/^\\d+$/.test(String(value))) return Number(value);
+                const parsed = Date.parse(value);
+                return Number.isFinite(parsed) ? parsed : undefined;
+            }
+
+            function validateStopPayload(data) {
+                if (data.latitude && !Number.isFinite(Number(data.latitude))) return 'Latitude must be numeric.';
+                if (data.longitude && !Number.isFinite(Number(data.longitude))) return 'Longitude must be numeric.';
+                if (!data.company && !data.address && !data.city) return 'At least company, address or city is required.';
+                return null;
+            }
+
+            async function saveDispatcherChanges() {
+                if (!selectedTourId || !canWriteTour) return;
+                const rows = Array.from(document.querySelectorAll('#dispatcher-stop-table tr.is-dirty'));
+                if (!rows.length) return;
+                const save = document.getElementById('dispatcher-save');
+                const cancel = document.getElementById('dispatcher-cancel');
+                if (save) save.disabled = true;
+                if (cancel) cancel.disabled = true;
+                try {
+                    const scrollBox = document.getElementById('dispatcher-table-wrap');
+                    const scrollTop = scrollBox ? scrollBox.scrollTop : 0;
+                    for (const row of rows) {
+                        const payload = collectStopPayload(row);
+                        const validation = validateStopPayload(payload);
+                        if (validation) throw new Error(validation);
+                        const stopId = row.dataset.stopId;
+                        const res = await fetch('/api/tours/' + selectedTourId + '/stops/' + stopId, { method:'PATCH', headers:{ 'Content-Type':'application/json', 'x-csrf-token': window.adminCsrfToken }, body: JSON.stringify(payload) });
+                        const response = await res.json().catch(async () => ({ error: await res.text() }));
+                        if (!res.ok) throw new Error(response.error || 'Stop save failed.');
+                    }
+                    showToast('Stop table saved.');
+                    await openTour(selectedTourId);
+                    const refreshed = document.getElementById('dispatcher-table-wrap');
+                    if (refreshed) refreshed.scrollTop = scrollTop;
+                } catch (err) {
+                    updateDispatcherStatus(err.message, true);
+                    showToast(err.message, 'error');
+                    if (save) save.disabled = false;
+                    if (cancel) cancel.disabled = false;
+                }
+            }
+
+            function cancelDispatcherChanges() {
+                document.querySelectorAll('#dispatcher-stop-table tr.is-dirty').forEach(row => {
+                    row.querySelectorAll('[data-field]').forEach(input => { input.value = input.dataset.originalValue || ''; });
+                    row.classList.remove('is-dirty');
+                });
+                updateDispatcherStatus('Changes discarded.');
+            }
+
+            async function moveDispatcherStop(event) {
+                if (!selectedTourId || !canWriteTour) return;
+                const button = event.currentTarget;
+                const row = button.closest('tr[data-stop-id]');
+                const rows = Array.from(document.querySelectorAll('#dispatcher-stop-table tbody tr[data-stop-id]'));
+                const index = rows.indexOf(row);
+                const targetIndex = button.dataset.move === 'up' ? index - 1 : index + 1;
+                if (targetIndex < 0 || targetIndex >= rows.length) return;
+                rows.splice(index, 1);
+                rows.splice(targetIndex, 0, row);
+                await persistStopOrder(rows.map(r => Number(r.dataset.stopId)));
+            }
+
+            async function persistStopOrder(orderedStopIds) {
+                setDispatcherBusy(true);
+                try {
+                    const res = await fetch('/api/tours/' + selectedTourId + '/stops/reorder', { method:'POST', headers:{ 'Content-Type':'application/json', 'x-csrf-token': window.adminCsrfToken }, body: JSON.stringify({ orderedStopIds }) });
+                    const payload = await res.json().catch(async () => ({ error: await res.text() }));
+                    if (!res.ok) throw new Error(payload.error || payload.message || 'Stop reorder failed.');
+                    showToast('Stop order saved.');
+                    await openTour(selectedTourId);
+                } catch (err) {
+                    updateDispatcherStatus(err.message, true);
+                    showToast(err.message, 'error');
+                    setDispatcherBusy(false);
+                }
+            }
+
+            async function addDispatcherStop() {
+                if (!selectedTourId || !canWriteTour) return;
+                const payload = {
+                    stop_type: document.getElementById('new-stop-type').value,
+                    company: document.getElementById('new-stop-company').value,
+                    address: document.getElementById('new-stop-address').value,
+                    address_full: document.getElementById('new-stop-address').value,
+                    city: document.getElementById('new-stop-city').value,
+                    country: document.getElementById('new-stop-country').value
+                };
+                const validation = validateStopPayload(payload);
+                if (validation) return updateDispatcherStatus(validation, true);
+                setDispatcherBusy(true);
+                try {
+                    const res = await fetch('/api/tours/' + selectedTourId + '/stops', { method:'POST', headers:{ 'Content-Type':'application/json', 'x-csrf-token': window.adminCsrfToken }, body: JSON.stringify(payload) });
+                    const response = await res.json().catch(async () => ({ error: await res.text() }));
+                    if (!res.ok) throw new Error(response.error || 'Stop create failed.');
+                    showToast('Stop added.');
+                    await openTour(selectedTourId);
+                } catch (err) {
+                    updateDispatcherStatus(err.message, true);
+                    showToast(err.message, 'error');
+                    setDispatcherBusy(false);
+                }
+            }
+
+            async function deleteDispatcherStop(event) {
+                if (!selectedTourId || !canWriteTour) return;
+                const button = event.currentTarget;
+                const row = button.closest('tr[data-stop-id]');
+                const label = row.querySelector('[data-field="company"]')?.value || row.querySelector('[data-field="address"]')?.value || 'this stop';
+                if (!confirm('Delete ' + label + '?')) return;
+                button.disabled = true;
+                try {
+                    const res = await fetch('/api/tours/' + selectedTourId + '/stops/' + row.dataset.stopId, { method:'DELETE', headers:{ 'x-csrf-token': window.adminCsrfToken } });
+                    const payload = await res.json().catch(async () => ({ error: await res.text() }));
+                    if (!res.ok) throw new Error(payload.error || 'Stop delete failed.');
+                    showToast('Stop deleted.');
+                    await openTour(selectedTourId);
+                } catch (err) {
+                    button.disabled = false;
+                    updateDispatcherStatus(err.message, true);
+                    showToast(err.message, 'error');
+                }
+            }
+
+            function setDispatcherBusy(isBusy) {
+                document.querySelectorAll('#tour-edit-panel button, #tour-edit-panel input, #tour-edit-panel select, #tour-edit-panel textarea').forEach(el => { el.disabled = isBusy || !canWriteTour; });
             }
 
             async function saveTourBasics(event) {
@@ -773,26 +1027,6 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                     if (!res.ok) throw new Error(payload.error || 'Tour save failed.');
                     showToast('Tour saved.');
                     await loadTours();
-                    await openTour(selectedTourId);
-                } catch (err) {
-                    showToast(err.message, 'error');
-                } finally {
-                    if (button) button.disabled = false;
-                }
-            }
-
-            async function saveStopCoordinates(stopId) {
-                if (!selectedTourId || !canWriteTour) return;
-                const row = document.getElementById('stop-row-' + stopId);
-                const latitude = row.querySelector('[name="latitude"]').value;
-                const longitude = row.querySelector('[name="longitude"]').value;
-                const button = row.querySelector('button');
-                if (button) button.disabled = true;
-                try {
-                    const res = await fetch('/api/tours/' + selectedTourId + '/stops/' + stopId, { method:'PATCH', headers:{ 'Content-Type':'application/json', 'x-csrf-token': window.adminCsrfToken }, body: JSON.stringify({ latitude, longitude }) });
-                    const payload = await res.json().catch(async () => ({ error: await res.text() }));
-                    if (!res.ok) throw new Error(payload.error || 'Stop save failed.');
-                    showToast('Stop saved.');
                     await openTour(selectedTourId);
                 } catch (err) {
                     showToast(err.message, 'error');
