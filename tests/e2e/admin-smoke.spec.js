@@ -207,8 +207,14 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.goto('/admin/tours');
     await expect(page.locator('#tour-map')).toBeVisible();
     await expect(page.locator('#tours-list-container')).toContainText('LogiHERO Dev');
-    await page.locator('#tours-list-container .tour-item').first().click();
+    await page.locator('#tours-list-container .tour-item').filter({ hasText: 'LogiHERO Dev Budapest Route' }).click();
     await expect(page.locator('#tour-details-card')).toBeVisible();
+    await expect(page.locator('#tour-map .admin-map-tile').first()).toBeVisible();
+    await expect(page.locator('#tour-map .admin-map-marker').first()).toBeVisible();
+    await page.locator('#route-recalc-button').click();
+    await expect(page.locator('#route-recalc-button')).toBeEnabled({ timeout: 15000 });
+    await expect(page.locator('#tour-map .admin-map-route-polyline').first()).toBeVisible();
+    await expect(page.locator('#tour-route-diagnostics')).toContainText('Route status');
 
     await page.getByRole('button', { name: /Kijelentkez/i }).click();
     await expect(page).toHaveURL(/\/admin\/login/);

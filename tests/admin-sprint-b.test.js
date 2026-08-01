@@ -258,6 +258,9 @@ test('Tour admin regression keeps the legacy rich route visible', async () => {
     assert.match(res.text, /tour-details-card/);
     assert.match(res.text, /tour-cargo-summary/);
     assert.match(res.text, /tour-map/);
+    assert.match(res.text, /admin-map-tile/);
+    assert.match(res.text, /admin-map-route-polyline/);
+    assert.match(res.text, /tile\.openstreetmap\.org/);
     assert.match(res.text, /tour-route-diagnostics/);
     assert.match(res.text, /route-recalc-button/);
     assert.match(res.text, /dispatcher-stop-table/);
