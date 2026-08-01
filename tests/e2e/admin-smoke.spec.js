@@ -3,6 +3,23 @@ const { test, expect } = require('@playwright/test');
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'local-dev-admin-token';
 const READ_ONLY_ADMIN_TOKEN = process.env.READ_ONLY_ADMIN_TOKEN || 'local-dev-read-only-token';
 
+function requestFailureDetails(request) {
+    const failure = request.failure();
+    return {
+        url: request.url(),
+        method: request.method(),
+        resourceType: request.resourceType(),
+        errorText: failure ? failure.errorText : '',
+        frameUrl: request.frame()?.url() || ''
+    };
+}
+
+function isBenignNavigationCancellation(details) {
+    return details.resourceType === 'document'
+        && details.errorText === 'net::ERR_ABORTED'
+        && details.method === 'GET';
+}
+
 test.beforeEach(async ({ page }) => {
     const failures = [];
 
@@ -19,13 +36,24 @@ test.beforeEach(async ({ page }) => {
         }
     });
     page.on('requestfailed', (request) => {
-        const url = request.url();
-        if (!url.includes('favicon') && !url.includes('tile.openstreetmap.org')) {
-            failures.push(`request failed: ${url}`);
+        const details = requestFailureDetails(request);
+        if (isBenignNavigationCancellation(details)) return;
+        if (!details.url.includes('favicon') && !details.url.includes('tile.openstreetmap.org')) {
+            failures.push(`request failed: ${details.method} ${details.resourceType} ${details.url} ${details.errorText}`);
         }
     });
 
     page.failures = failures;
+});
+
+test('request-failure collector ignores only benign document navigation cancellations', () => {
+    const benign = { method: 'GET', resourceType: 'document', errorText: 'net::ERR_ABORTED', url: 'http://127.0.0.1:3100/admin' };
+    const documentFailure = { method: 'GET', resourceType: 'document', errorText: 'net::ERR_CONNECTION_REFUSED', url: 'http://127.0.0.1:3100/admin' };
+    const apiAbort = { method: 'GET', resourceType: 'fetch', errorText: 'net::ERR_ABORTED', url: 'http://127.0.0.1:3100/api/sync/version' };
+
+    expect(isBenignNavigationCancellation(benign)).toBeTruthy();
+    expect(isBenignNavigationCancellation(documentFailure)).toBeFalsy();
+    expect(isBenignNavigationCancellation(apiAbort)).toBeFalsy();
 });
 
 test.afterEach(async ({ page }) => {
