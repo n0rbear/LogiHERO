@@ -680,6 +680,68 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
 
             const km = v => Number(v || 0).toFixed(1) + ' km';
             const min = s => Math.round(Number(s || 0) / 60) + ' perc';
+            function isDrawableCoord(lat, lng) {
+                const la = Number(lat), ln = Number(lng);
+                return Number.isFinite(la) && Number.isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180 && Math.abs(la) > 0.000001 && Math.abs(ln) > 0.000001;
+            }
+            function mapQueryUrl(item) {
+                if (isDrawableCoord(item.latitude, item.longitude)) return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(Number(item.latitude) + ',' + Number(item.longitude));
+                const address = item.address_line_1 || item.address || [item.city, item.country].filter(Boolean).join(' ');
+                return address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(address) : '';
+            }
+            function streetViewUrl(item) {
+                if (isDrawableCoord(item.latitude, item.longitude)) return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=' + encodeURIComponent(Number(item.latitude) + ',' + Number(item.longitude));
+                const address = item.address_line_1 || item.address || [item.city, item.country].filter(Boolean).join(' ');
+                return address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(address) : '';
+            }
+            function hotelDedupKey(hotel) {
+                if (hotel.uuid) return 'hotel-uuid:' + hotel.uuid;
+                if (hotel.id) return 'hotel-id:' + hotel.id;
+                if (hotel.stop_id) return 'hotel-stop:' + hotel.stop_id;
+                if (isDrawableCoord(hotel.latitude, hotel.longitude)) return 'coord:' + Number(hotel.latitude).toFixed(6) + ',' + Number(hotel.longitude).toFixed(6);
+                return '';
+            }
+            function dedupeHotelsForTour(hotels, stops) {
+                const hotelStops = new Set();
+                (stops || []).filter(s => String(s.stop_type || '').toUpperCase() === 'HOTEL').forEach(s => {
+                    if (s.id) hotelStops.add('stop-id:' + s.id);
+                    if (s.uuid) hotelStops.add('stop-uuid:' + s.uuid);
+                    if (isDrawableCoord(s.latitude, s.longitude)) hotelStops.add('coord:' + Number(s.latitude).toFixed(6) + ',' + Number(s.longitude).toFixed(6));
+                });
+                const seen = new Set();
+                return (hotels || []).filter(h => {
+                    const key = hotelDedupKey(h);
+                    const stopId = h.stop_id || h.stopId;
+                    const coordKey = isDrawableCoord(h.latitude, h.longitude) ? 'coord:' + Number(h.latitude).toFixed(6) + ',' + Number(h.longitude).toFixed(6) : '';
+                    if (!key || seen.has(key)) return false;
+                    if (stopId && hotelStops.has('stop-id:' + stopId)) return false;
+                    if (!stopId && coordKey && hotelStops.has(coordKey)) return false;
+                    seen.add(key);
+                    return true;
+                });
+            }
+            function hotelPopupHtml(h) {
+                const address = h.address_line_1 || h.address || [h.city, h.country].filter(Boolean).join(' ');
+                const maps = mapQueryUrl(h);
+                const street = streetViewUrl(h);
+                const rows = [
+                    ['Address', address],
+                    ['Status', h.status],
+                    ['Check-in', [h.check_in_date, h.check_in_time].filter(Boolean).join(' ')],
+                    ['Check-out', [h.check_out_date, h.check_out_time].filter(Boolean).join(' ')],
+                    ['Room', h.room_number || h.room_type],
+                    ['Booking', h.booking_number],
+                    ['Phone', h.phone || h.phone_number],
+                    ['Tour', h.tour_id ? '#' + h.tour_id : ''],
+                    ['Related stop', h.stop_id ? '#' + h.stop_id : '']
+                ].filter(row => row[1]);
+                return '<h4>' + esc(h.name || 'Hotel') + '</h4>'
+                    + (rows.map(row => '<p><b>' + esc(row[0]) + ':</b> ' + esc(row[1]) + '</p>').join('') || '<p>No hotel details available.</p>')
+                    + '<div class="admin-map-popup-actions">'
+                    + (maps ? '<a href="' + esc(maps) + '" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' : '')
+                    + (street ? '<a href="' + esc(street) + '" target="_blank" rel="noopener noreferrer">Try Street View</a>' : '')
+                    + '</div>';
+            }
 
             async function openTour(id) {
                 selectedTourId = id;
@@ -687,6 +749,8 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 const r = await fetch('/api/tours/' + id);
                 const d = await r.json();
                 const route = await (await fetch('/api/tours/' + id + '/route')).json();
+                const hotelsResponse = await fetch('/api/tours/' + id + '/hotels');
+                const tourHotels = hotelsResponse.ok ? await hotelsResponse.json() : [];
 
                 layer.clearLayers();
                 document.getElementById('tour-title').textContent = d.tour.name;
@@ -731,10 +795,18 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 d.stops.forEach((s, i) => {
                     if (s.latitude && s.longitude && Math.abs(s.latitude) > 0.0001) {
                         const label = (s.stop_status === 'COMPLETED' ? '✓' : s.stop_status === 'PROBLEM' ? '!' : String(i + 1));
-                        const icon = L.divIcon({ html: '<div style="background:#fff;border:2px solid var(--color-brand);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;">' + label + '</div>', iconSize: [24, 24] });
-                        L.marker([s.latitude, s.longitude], { icon }).addTo(layer).bindPopup('<b>' + esc(s.recipient || s.company || 'Megálló') + '</b><br>' + esc(s.stop_status || 'PENDING'));
+                        const isHotelStop = String(s.stop_type || '').toUpperCase() === 'HOTEL';
+                        const icon = L.divIcon({ html: '<div style="background:' + (isHotelStop ? '#fff7ed' : '#fff') + ';border:2px solid ' + (isHotelStop ? '#f97316' : 'var(--color-brand)') + ';border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;">' + label + '</div>', iconSize: [24, 24], className: isHotelStop ? 'hotel-marker' : 'stop-marker' });
+                        L.marker([s.latitude, s.longitude], { icon }).addTo(layer).bindPopup(isHotelStop ? hotelPopupHtml((tourHotels || []).find(h => (h.stop_id && String(h.stop_id) === String(s.id)) || (isDrawableCoord(h.latitude, h.longitude) && Number(h.latitude).toFixed(6) === Number(s.latitude).toFixed(6) && Number(h.longitude).toFixed(6) === Number(s.longitude).toFixed(6))) || { name: s.recipient || s.company, address: s.address_full || s.address, status: s.stop_status, latitude: s.latitude, longitude: s.longitude, tour_id: selectedTourId }) : '<b>' + esc(s.recipient || s.company || 'Megálló') + '</b><br>' + esc(s.stop_status || 'PENDING'));
                         bounds.push([s.latitude, s.longitude]);
                     }
+                });
+
+                dedupeHotelsForTour(tourHotels, d.stops).forEach((h) => {
+                    if (!isDrawableCoord(h.latitude, h.longitude)) return;
+                    const icon = L.divIcon({ html: '<div style="background:#0f172a;color:#fff;border:2px solid #f97316;border-radius:8px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;">H</div>', iconSize: [28, 28] });
+                    L.marker([h.latitude, h.longitude], { icon, markerType: 'hotel', className: 'hotel-marker' }).addTo(layer).bindPopup(hotelPopupHtml(h));
+                    bounds.push([h.latitude, h.longitude]);
                 });
 
                 if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });

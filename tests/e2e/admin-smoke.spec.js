@@ -20,10 +20,19 @@ function isBenignNavigationCancellation(details) {
         && details.method === 'GET';
 }
 
+function isBenignExternalTileConsoleError(message) {
+    const location = typeof message.location === 'function' ? message.location() : {};
+    const url = location.url || '';
+    return message.type && message.type() === 'error'
+        && message.text() === 'Failed to load resource: net::ERR_NETWORK_ACCESS_DENIED'
+        && url.includes('tile.openstreetmap.org');
+}
+
 test.beforeEach(async ({ page }) => {
     const failures = [];
 
     page.on('console', (message) => {
+        if (isBenignExternalTileConsoleError(message)) return;
         if (message.type() === 'error' && !message.text().includes('favicon')) {
             failures.push(`console error: ${message.text()}`);
         }
@@ -54,6 +63,21 @@ test('request-failure collector ignores only benign document navigation cancella
     expect(isBenignNavigationCancellation(benign)).toBeTruthy();
     expect(isBenignNavigationCancellation(documentFailure)).toBeFalsy();
     expect(isBenignNavigationCancellation(apiAbort)).toBeFalsy();
+});
+
+test('console collector ignores only external OSM tile network denials', () => {
+    const tileMessage = {
+        type: () => 'error',
+        text: () => 'Failed to load resource: net::ERR_NETWORK_ACCESS_DENIED',
+        location: () => ({ url: 'https://tile.openstreetmap.org/8/137/88.png' })
+    };
+    const apiMessage = {
+        type: () => 'error',
+        text: () => 'Failed to load resource: net::ERR_NETWORK_ACCESS_DENIED',
+        location: () => ({ url: 'http://127.0.0.1:3100/api/tours' })
+    };
+    expect(isBenignExternalTileConsoleError(tileMessage)).toBeTruthy();
+    expect(isBenignExternalTileConsoleError(apiMessage)).toBeFalsy();
 });
 
 test.afterEach(async ({ page }) => {
@@ -211,9 +235,32 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await expect(page.locator('#tour-details-card')).toBeVisible();
     await expect(page.locator('#tour-map .admin-map-tile').first()).toBeVisible();
     await expect(page.locator('#tour-map .admin-map-marker').first()).toBeVisible();
+    const mapBox = await page.locator('#tour-map').boundingBox();
+    expect(mapBox).toBeTruthy();
+    const zoomBefore = await page.locator('#tour-map').getAttribute('data-zoom');
+    await page.locator('#tour-map').dispatchEvent('wheel', {
+        deltaY: -240,
+        clientX: mapBox.x + mapBox.width / 2,
+        clientY: mapBox.y + mapBox.height / 2
+    });
+    await expect.poll(async () => page.locator('#tour-map').getAttribute('data-zoom')).not.toBe(zoomBefore);
+    const centerBeforePan = await page.locator('#tour-map').getAttribute('data-center');
+    await page.locator('#tour-map').dispatchEvent('mousedown', { clientX: mapBox.x + 32, clientY: mapBox.y + 32 });
+    await page.locator('#tour-map').dispatchEvent('mousemove', { clientX: mapBox.x + 112, clientY: mapBox.y + 62 });
+    await page.locator('#tour-map').dispatchEvent('mouseup', { clientX: mapBox.x + 112, clientY: mapBox.y + 62 });
+    await expect.poll(async () => page.locator('#tour-map').getAttribute('data-center')).not.toBe(centerBeforePan);
+    await page.locator('#tour-map .admin-map-fit-route').click();
     await page.locator('#route-recalc-button').click();
     await expect(page.locator('#route-recalc-button')).toBeEnabled({ timeout: 15000 });
     await expect(page.locator('#tour-map .admin-map-route-polyline').first()).toBeVisible();
+    const hotelMarkers = page.locator('#tour-map .admin-map-marker.hotel-marker');
+    await expect(hotelMarkers.first()).toBeVisible();
+    await hotelMarkers.first().click();
+    await expect(page.locator('#tour-map .admin-map-popup')).toContainText('Open in Google Maps');
+    const mapsLink = page.locator('#tour-map .admin-map-popup a', { hasText: 'Open in Google Maps' });
+    await expect(mapsLink).toHaveAttribute('target', '_blank');
+    await expect(mapsLink).toHaveAttribute('rel', 'noopener noreferrer');
+    await expect(page.locator('#tour-map .admin-map-popup')).toContainText('Try Street View');
     await expect(page.locator('#tour-route-diagnostics')).toContainText('Route status');
 
     await page.getByRole('button', { name: /Kijelentkez/i }).click();

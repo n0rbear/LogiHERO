@@ -263,6 +263,13 @@ test('Tour admin regression keeps the legacy rich route visible', async () => {
     assert.match(res.text, /tile\.openstreetmap\.org/);
     assert.match(res.text, /tour-route-diagnostics/);
     assert.match(res.text, /route-recalc-button/);
+    assert.match(res.text, /\/api\/tours\/' \+ id \+ '\/hotels/);
+    assert.match(res.text, /dedupeHotelsForTour/);
+    assert.match(res.text, /hotelPopupHtml/);
+    assert.match(res.text, /Open in Google Maps/);
+    assert.match(res.text, /Try Street View/);
+    assert.match(res.text, /rel="noopener noreferrer"/);
+    assert.match(res.text, /markerType: 'hotel'/);
     assert.match(res.text, /dispatcher-stop-table/);
     assert.match(res.text, /Dispatcher stop table/);
     assert.match(res.text, /Save changes/);

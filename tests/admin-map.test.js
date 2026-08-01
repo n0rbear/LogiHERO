@@ -2,6 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
     boundsForLatLngs,
+    dedupeTourHotelMarkers,
+    googleMapsUrlForLocation,
+    googleStreetViewUrlForLocation,
     isDrawableCoordinate,
     normalizeLineStringCoordinates,
     projectLatLngToPercent,
@@ -67,4 +70,53 @@ test('admin map render output creates tile, marker and route layers without exte
     assert.doesNotMatch(script, /unpkg\.com/);
     assert.match(styles, /\.admin-map/);
     assert.match(styles, /\.admin-map-route-polyline/);
+});
+
+test('admin map render output includes bounded zoom, drag, resize and fit-route lifecycle', () => {
+    const script = renderAdminMapScript();
+    const styles = renderAdminMapStyles();
+
+    assert.match(script, /MIN_ZOOM/);
+    assert.match(script, /MAX_ZOOM/);
+    assert.match(script, /addEventListener\('wheel'/);
+    assert.match(script, /passive: false/);
+    assert.match(script, /addEventListener\('pointerdown'/);
+    assert.match(script, /addEventListener\('pointermove'/);
+    assert.match(script, /addEventListener\('mousedown'/);
+    assert.match(script, /addEventListener\('mousemove'/);
+    assert.match(script, /fitRoute/);
+    assert.match(script, /admin-map-fit-route/);
+    assert.match(script, /listenersInstalled/);
+    assert.match(styles, /touch-action: none/);
+    assert.match(styles, /admin-map-dragging/);
+});
+
+test('admin map hotel helpers deduplicate linked hotels and HOTEL stops safely', () => {
+    const hotels = [
+        { id: 1, uuid: 'hotel-a', stop_id: 2, latitude: 47.5, longitude: 19.04 },
+        { id: 2, uuid: 'hotel-b', latitude: 47.6, longitude: 19.05 },
+        { id: 2, uuid: 'hotel-b', latitude: 47.6, longitude: 19.05 },
+        { id: 3, latitude: 0, longitude: 0 }
+    ];
+    const stops = [
+        { id: 2, stop_type: 'HOTEL', latitude: 47.5, longitude: 19.04 },
+        { id: 4, stop_type: 'DELIVERY', latitude: 47.6, longitude: 19.05 }
+    ];
+
+    assert.deepEqual(dedupeTourHotelMarkers(hotels, stops), [
+        { id: 2, uuid: 'hotel-b', latitude: 47.6, longitude: 19.05 }
+    ]);
+});
+
+test('admin map external links are key-free, encoded and coordinate validated', () => {
+    const coordinateMaps = googleMapsUrlForLocation({ latitude: 47.5, longitude: 19.04 });
+    const coordinateStreet = googleStreetViewUrlForLocation({ latitude: 47.5, longitude: 19.04 });
+    const addressMaps = googleMapsUrlForLocation({ address: 'Main Street 1, Budapest' });
+
+    assert.equal(coordinateMaps, 'https://www.google.com/maps/search/?api=1&query=47.5%2C19.04');
+    assert.equal(coordinateStreet, 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=47.5%2C19.04');
+    assert.equal(addressMaps, 'https://www.google.com/maps/search/?api=1&query=Main%20Street%201%2C%20Budapest');
+    assert.equal(googleMapsUrlForLocation({ latitude: 0, longitude: 0 }), null);
+    assert.doesNotMatch(coordinateStreet, /key=/i);
+    assert.doesNotMatch(addressMaps, /javascript:/i);
 });
