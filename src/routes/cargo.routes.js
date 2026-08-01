@@ -1,9 +1,18 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
 
 const cargoRoutes = express.Router();
+const CARGO_TYPES = new Set(['MACHINE', 'PALLET', 'BOX', 'PART', 'VEHICLE', 'EQUIPMENT', 'OTHER']);
+const CARGO_STATUSES = new Set(['PLANNED', 'READY_FOR_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED', 'REJECTED', 'DAMAGED', 'MISSING', 'CANCELLED']);
+const ADMIN_STATUS_TRANSITIONS = {
+    PLANNED: ['READY_FOR_PICKUP', 'PICKED_UP', 'CANCELLED', 'REJECTED', 'DAMAGED', 'MISSING'],
+    READY_FOR_PICKUP: ['PICKED_UP', 'CANCELLED', 'REJECTED', 'DAMAGED', 'MISSING'],
+    PICKED_UP: ['IN_TRANSIT', 'DELIVERED', 'DAMAGED', 'MISSING'],
+    IN_TRANSIT: ['DELIVERED', 'DAMAGED', 'MISSING']
+};
 
 function numberOrNull(value) {
     if (value === undefined || value === null || value === '') return null;
@@ -18,6 +27,44 @@ function textOrNull(value) {
 function normalizeSerial(sn) {
     if (!sn) return null;
     return String(sn).trim().toUpperCase().replace(/[-\s]/g, '');
+}
+
+function positiveIntOrDefault(value, fallback = 1) {
+    if (value === undefined || value === null || value === '') return fallback;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1) throw new Error('INVALID_QUANTITY');
+    return parsed;
+}
+
+function nonNegativeNumberOrNull(value, field) {
+    const parsed = numberOrNull(value);
+    if (parsed !== null && parsed < 0) throw new Error(`INVALID_${field.toUpperCase()}`);
+    return parsed;
+}
+
+function normalizeCargoType(value) {
+    const type = textOrNull(value) || 'MACHINE';
+    if (!CARGO_TYPES.has(type)) throw new Error('INVALID_CARGO_TYPE');
+    return type;
+}
+
+function normalizeCargoStatus(value) {
+    const status = textOrNull(value) || 'PLANNED';
+    if (!CARGO_STATUSES.has(status)) throw new Error('INVALID_CARGO_STATUS');
+    return status;
+}
+
+function validateAdminStatusTransition(fromStatus, toStatus, overrideReason) {
+    if (!toStatus || toStatus === fromStatus || overrideReason) return;
+    const allowed = ADMIN_STATUS_TRANSITIONS[fromStatus] || [];
+    if (!allowed.includes(toStatus)) {
+        throw new Error(`INVALID_TRANSITION_${fromStatus}_TO_${toStatus}`);
+    }
+}
+
+async function requireTour(client, tourId) {
+    const tour = await client.query('SELECT id FROM tours WHERE id = $1 AND deleted_at IS NULL', [tourId]);
+    if (tour.rowCount === 0) throw new Error('TOUR_NOT_FOUND');
 }
 
 async function checkSerial(client, tourId, serialNumber) {
@@ -79,14 +126,20 @@ cargoRoutes.get('/api/tours/:tourId/cargo', async (req, res) => {
 });
 
 // POST /api/tours/:tourId/cargo
-cargoRoutes.post('/api/tours/:tourId/cargo', requireAdmin, async (req, res) => {
+cargoRoutes.post('/api/tours/:tourId/cargo', requireAdmin, requireAdminWrite, async (req, res) => {
     const client = await pool.connect();
     try {
         const { tourId } = req.params;
         const b = req.body;
         const now = Date.now();
+        const type = normalizeCargoType(b.type);
+        const status = normalizeCargoStatus(b.status);
+        const quantity = positiveIntOrDefault(b.quantity);
+        const name = textOrNull(b.name);
+        if (!name) throw new Error('CARGO_NAME_REQUIRED');
 
         await client.query('BEGIN');
+        await requireTour(client, tourId);
         await validateStopLinkage(client, tourId, b.pickup_stop_id, b.delivery_stop_id);
         const globalDup = await checkSerial(client, tourId, b.serial_number);
 
@@ -95,14 +148,14 @@ cargoRoutes.post('/api/tours/:tourId/cargo', requireAdmin, async (req, res) => {
                 tour_id, pickup_stop_id, delivery_stop_id, type, name, description,
                 quantity, unit, serial_number, external_reference, customer_reference,
                 weight_kg, length_cm, width_cm, height_cm, status, notes, driver_name,
-                updated_at, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19)
+                updated_at, created_at, sync_state, revision
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19, 'SYNCED', 1)
             RETURNING *`,
             [
-                tourId, b.pickup_stop_id, b.delivery_stop_id, b.type || 'MACHINE', b.name, b.description,
-                b.quantity || 1, b.unit || 'pcs', b.serial_number, b.external_reference, b.customer_reference,
-                numberOrNull(b.weight_kg), numberOrNull(b.length_cm), numberOrNull(b.width_cm), numberOrNull(b.height_cm),
-                b.status || 'PLANNED', b.notes, b.driver_name, now
+                tourId, b.pickup_stop_id, b.delivery_stop_id, type, name, textOrNull(b.description),
+                quantity, textOrNull(b.unit) || 'pcs', textOrNull(b.serial_number), textOrNull(b.external_reference), textOrNull(b.customer_reference),
+                nonNegativeNumberOrNull(b.weight_kg, 'weight_kg'), nonNegativeNumberOrNull(b.length_cm, 'length_cm'), nonNegativeNumberOrNull(b.width_cm, 'width_cm'), nonNegativeNumberOrNull(b.height_cm, 'height_cm'),
+                status, textOrNull(b.notes), textOrNull(b.driver_name), now
             ]
         );
 
@@ -124,7 +177,7 @@ cargoRoutes.post('/api/tours/:tourId/cargo', requireAdmin, async (req, res) => {
         res.status(201).json({ ...cargo, warning: globalDup ? 'SERIAL_EXISTS_ELSEWHERE' : null, previousCargo: globalDup });
     } catch (e) {
         await client.query('ROLLBACK');
-        res.status(e.message.includes('DUPLICATE') ? 409 : 400).json({ error: e.message });
+        res.status(e.message.includes('DUPLICATE') ? 409 : e.message.includes('NOT_FOUND') ? 404 : 400).json({ error: e.message });
     } finally {
         client.release();
     }
@@ -154,12 +207,15 @@ cargoRoutes.get('/api/check-serial', requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/cargo/:cargoId
-cargoRoutes.patch('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
+cargoRoutes.patch('/api/cargo/:cargoId', requireAdmin, requireAdminWrite, async (req, res) => {
     const client = await pool.connect();
     try {
         const { cargoId } = req.params;
         const b = req.body;
         const now = Date.now();
+        const type = b.type === undefined ? undefined : normalizeCargoType(b.type);
+        const status = b.status === undefined ? undefined : normalizeCargoStatus(b.status);
+        const quantity = b.quantity === undefined || b.quantity === null || b.quantity === '' ? undefined : positiveIntOrDefault(b.quantity);
 
         await client.query('BEGIN');
         const existingRes = await client.query('SELECT * FROM cargo WHERE id = $1 AND deleted_at IS NULL', [cargoId]);
@@ -178,6 +234,7 @@ cargoRoutes.patch('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
         if (['DELIVERED', 'CANCELLED', 'REJECTED', 'MISSING'].includes(existing.status) && !b.override_reason) {
             throw new Error('STATUS_LOCKED_OVERRIDE_REQUIRED');
         }
+        validateAdminStatusTransition(existing.status, status, b.override_reason);
 
         const result = await client.query(
             `UPDATE cargo SET
@@ -197,20 +254,22 @@ cargoRoutes.patch('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
                 notes = COALESCE($14, notes),
                 pickup_stop_id = COALESCE($15, pickup_stop_id),
                 delivery_stop_id = COALESCE($16, delivery_stop_id),
-                updated_at = $17
+                updated_at = $17,
+                sync_state = 'SYNCED',
+                revision = COALESCE(revision, 1) + 1
             WHERE id = $18 RETURNING *`,
             [
-                b.name, b.description, b.type, b.quantity, b.unit, b.serial_number,
-                b.external_reference, b.customer_reference, numberOrNull(b.weight_kg),
-                numberOrNull(b.length_cm), numberOrNull(b.width_cm), numberOrNull(b.height_cm),
-                b.status, b.notes, b.pickup_stop_id, b.delivery_stop_id, now, cargoId
+                b.name === undefined ? undefined : textOrNull(b.name), b.description === undefined ? undefined : textOrNull(b.description), type, quantity, b.unit === undefined ? undefined : (textOrNull(b.unit) || 'pcs'), b.serial_number === undefined ? undefined : textOrNull(b.serial_number),
+                b.external_reference === undefined ? undefined : textOrNull(b.external_reference), b.customer_reference === undefined ? undefined : textOrNull(b.customer_reference), b.weight_kg === undefined ? undefined : nonNegativeNumberOrNull(b.weight_kg, 'weight_kg'),
+                b.length_cm === undefined ? undefined : nonNegativeNumberOrNull(b.length_cm, 'length_cm'), b.width_cm === undefined ? undefined : nonNegativeNumberOrNull(b.width_cm, 'width_cm'), b.height_cm === undefined ? undefined : nonNegativeNumberOrNull(b.height_cm, 'height_cm'),
+                status, b.notes === undefined ? undefined : textOrNull(b.notes), b.pickup_stop_id, b.delivery_stop_id, now, cargoId
             ]
         );
 
-        if (b.status && b.status !== existing.status) {
+        if (status && status !== existing.status) {
             await client.query(
                 'INSERT INTO cargo_events (cargo_id, event_type, from_status, to_status, timestamp, reason, actor_type) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-                [cargoId, b.override_reason ? 'STATUS_OVERRIDDEN' : 'UPDATED', existing.status, b.status, now, b.override_reason, 'ADMIN']
+                [cargoId, b.override_reason ? 'STATUS_OVERRIDDEN' : 'UPDATED', existing.status, status, now, b.override_reason, 'ADMIN']
             );
             if (b.override_reason) {
                 await ndp.trackEvent({
@@ -218,7 +277,7 @@ cargoRoutes.patch('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
                     eventType: 'cargo_status_overridden',
                     title: 'Cargo status overridden',
                     component: 'cargo',
-                    payload: { cargoId, from: existing.status, to: b.status, reason: b.override_reason }
+                    payload: { cargoId, from: existing.status, to: status, reason: b.override_reason }
                 });
             }
         }
@@ -234,7 +293,7 @@ cargoRoutes.patch('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
 });
 
 // DELETE /api/cargo/:cargoId
-cargoRoutes.delete('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
+cargoRoutes.delete('/api/cargo/:cargoId', requireAdmin, requireAdminWrite, async (req, res) => {
     try {
         const { cargoId } = req.params;
         const now = Date.now();
@@ -246,7 +305,7 @@ cargoRoutes.delete('/api/cargo/:cargoId', requireAdmin, async (req, res) => {
             return res.status(409).json({ error: 'CARGO_ALREADY_IN_TRANSIT', message: `Cargo in status ${existing.rows[0].status} cannot be deleted` });
         }
 
-        await pool.query('UPDATE cargo SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, cargoId]);
+        await pool.query("UPDATE cargo SET deleted_at = $1, updated_at = $1, sync_state = 'DELETED', revision = COALESCE(revision, 1) + 1 WHERE id = $2", [now, cargoId]);
         await pool.query('INSERT INTO cargo_events (cargo_id, event_type, timestamp, actor_type) VALUES ($1, $2, $3, $4)', [cargoId, 'DELETED', now, 'ADMIN']);
         res.json({ success: true });
     } catch (e) {
@@ -284,7 +343,10 @@ async function transitionCargo(req, res, eventType, fromStatuses, toStatus) {
             `UPDATE cargo SET status = $1,
              condition_at_pickup = CASE WHEN $2 = 'PICKED_UP' THEN $3 ELSE condition_at_pickup END,
              condition_at_delivery = CASE WHEN $2 = 'DELIVERED' THEN $3 ELSE condition_at_delivery END,
-             updated_at = $4 WHERE id = $5 RETURNING *`,
+             updated_at = $4,
+             sync_state = 'SYNCED',
+             revision = COALESCE(revision, 1) + 1
+             WHERE id = $5 RETURNING *`,
             [toStatus, eventType, condition, now, cargoId]
         );
 
@@ -329,7 +391,7 @@ cargoRoutes.post('/api/cargo/:cargoId/report-missing', async (req, res) => {
 });
 
 // Admin Resolution
-cargoRoutes.post('/api/cargo/:cargoId/resolve', requireAdmin, async (req, res) => {
+cargoRoutes.post('/api/cargo/:cargoId/resolve', requireAdmin, requireAdminWrite, async (req, res) => {
     const { cargoId } = req.params;
     const { status, reason } = req.body;
     if (!status || !reason) return res.status(400).json({ error: 'STATUS_AND_REASON_REQUIRED' });
@@ -338,7 +400,7 @@ cargoRoutes.post('/api/cargo/:cargoId/resolve', requireAdmin, async (req, res) =
         const existing = await pool.query('SELECT status FROM cargo WHERE id = $1 AND deleted_at IS NULL', [cargoId]);
         if (existing.rowCount === 0) return res.sendStatus(404);
 
-        await pool.query('UPDATE cargo SET status = $1, updated_at = $2 WHERE id = $3', [status, now, cargoId]);
+        await pool.query("UPDATE cargo SET status = $1, updated_at = $2, sync_state = 'SYNCED', revision = COALESCE(revision, 1) + 1 WHERE id = $3", [status, now, cargoId]);
         await pool.query('INSERT INTO cargo_events (cargo_id, event_type, from_status, to_status, timestamp, reason, actor_type) VALUES ($1, $2, $3, $4, $5, $6, $7)',
             [cargoId, 'RESOLVED', existing.rows[0].status, status, now, reason, 'ADMIN']);
 

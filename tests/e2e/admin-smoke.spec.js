@@ -96,6 +96,44 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.locator('#hotel-form button[type="submit"]').click();
     await expect(page.getByText(/Hotel mentve/i)).toBeVisible();
 
+    await page.goto('/admin/cargo');
+    await expect(page.locator('#cargo-list')).toBeVisible();
+    await expect(page.locator('#cargo-list')).toContainText('Dev Pallet');
+    await page.locator('#cargo-search').fill('DEV-CARGO-1');
+    await expect(page.locator('#cargo-list')).toContainText('Dev Pallet');
+    await page.locator('#cargo-list .cargo-card').first().click();
+    await expect(page.locator('#cargo-detail')).toContainText('DEV-CARGO-1');
+    await expect(page.locator('#cargo-detail')).toContainText('Serial');
+    await page.getByRole('button', { name: /^Edit$/ }).click();
+    const seededCargoTour = await page.locator('#cargo-form select[name="tour_id"]').inputValue();
+    await page.getByRole('button', { name: /^Cancel$/ }).click();
+
+    await page.getByRole('button', { name: /\+ Create Cargo/i }).click();
+    await page.locator('#cargo-form select[name="tour_id"]').selectOption(seededCargoTour);
+    await page.locator('#cargo-form input[name="name"]').fill(`E2E Cargo duplicate ${unique}`);
+    await page.locator('#cargo-form input[name="serial_number"]').fill('DEV-CARGO-1');
+    await page.locator('#cargo-form button[type="submit"]').click();
+    await expect(page.locator('#cargo-form-message')).toContainText('DUPLICATE_SERIAL_IN_TOUR');
+    page.failures = page.failures.filter((failure) => !failure.includes('409 (Conflict)'));
+
+    const cargoName = `E2E Cargo ${unique}`;
+    const cargoSerial = `E2E-CARGO-${unique}`;
+    await page.locator('#cargo-form input[name="name"]').fill(cargoName);
+    await page.locator('#cargo-form input[name="serial_number"]').fill(cargoSerial);
+    await page.locator('#cargo-form input[name="external_reference"]').fill('E2E machine model');
+    await page.locator('#cargo-form textarea[name="notes"]').fill(`E2E cargo note ${unique}`);
+    await page.locator('#cargo-form button[type="submit"]').click();
+    await expect(page.locator('#cargo-detail')).toContainText(cargoName);
+    await expect(page.locator('#cargo-detail')).toContainText(cargoSerial);
+
+    await page.getByRole('button', { name: /^Edit$/ }).click();
+    await page.locator('#cargo-form textarea[name="notes"]').fill(`E2E cargo edited ${unique}`);
+    await page.locator('#cargo-form button[type="submit"]').click();
+    await expect(page.locator('#cargo-detail')).toContainText(`E2E cargo edited ${unique}`);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: /Soft delete/i }).click();
+    await expect(page.locator('#cargo-detail')).toContainText('Select cargo to inspect details.');
+
     await page.goto('/admin/work-time');
     await expect(page.getByRole('heading', { name: /Munkaido|Munkaidő/i })).toBeVisible();
     await page.locator('input[name="driver"]').fill('LogiHERO Dev Driver Active');
@@ -151,7 +189,7 @@ test('admin production flow works in real Chromium', async ({ page }) => {
 test('read-only admin cannot write in real Chromium', async ({ page }) => {
     await readOnlyLogin(page);
 
-    for (const path of ['/admin', '/admin/drivers', '/admin/hotels', '/admin/tours', '/admin/work-time', '/admin/work-time/weekly']) {
+    for (const path of ['/admin', '/admin/drivers', '/admin/hotels', '/admin/tours', '/admin/cargo', '/admin/work-time', '/admin/work-time/weekly']) {
         await page.goto(path);
         await expect(page.locator('body')).not.toContainText('Internal Server Error');
     }
@@ -164,6 +202,14 @@ test('read-only admin cannot write in real Chromium', async ({ page }) => {
     await page.goto('/admin/drivers');
     await expect(page.locator('.rotate-device-token')).toHaveCount(0);
     await expect(page.locator('body')).not.toContainText('Token rotation');
+
+    await page.goto('/admin/cargo');
+    await expect(page.getByText('Read-only admin')).toBeVisible();
+    await expect(page.getByRole('button', { name: /\+ Create Cargo/i })).toHaveCount(0);
+    const deniedCargoCreate = await page.request.post('/api/tours/1/cargo', {
+        data: { name: 'Read only denied cargo' }
+    });
+    expect(deniedCargoCreate.status()).toBe(403);
 
     const directRotate = await page.request.post('/admin/drivers/11111111-1111-4111-8111-111111111111/devices/dev-device-active-1/rotate-token');
     expect(directRotate.status()).toBe(403);
