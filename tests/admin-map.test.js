@@ -72,6 +72,18 @@ test('admin map render output creates tile, marker and route layers without exte
     assert.match(styles, /\.admin-map-route-polyline/);
 });
 
+test('admin map tiles keep native OSM size instead of stretching to container fractions', () => {
+    const script = renderAdminMapScript();
+    const styles = renderAdminMapStyles();
+
+    assert.match(script, /const TILE_SIZE = 256/);
+    assert.match(styles, /\.admin-map-tiles\s*{[^}]*display:\s*block/s);
+    assert.match(styles, /\.admin-map-tile\s*{[^}]*width:\s*256px/s);
+    assert.match(styles, /\.admin-map-tile\s*{[^}]*height:\s*256px/s);
+    assert.match(styles, /\.admin-map-tile\s*{[^}]*max-width:\s*none/s);
+    assert.doesNotMatch(styles, /\.admin-map-tile\s*{[^}]*33\.3334%/s);
+});
+
 test('admin map render output includes bounded zoom, drag, resize and fit-route lifecycle', () => {
     const script = renderAdminMapScript();
     const styles = renderAdminMapStyles();

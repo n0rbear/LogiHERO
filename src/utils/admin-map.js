@@ -562,19 +562,19 @@ function renderAdminMapStyles() {
             inset: 0;
         }
         .admin-map-tiles {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            grid-template-rows: repeat(3, 1fr);
+            display: block;
             opacity: .98;
             background:
                 linear-gradient(90deg, rgba(255,255,255,.4) 1px, transparent 1px),
                 linear-gradient(0deg, rgba(255,255,255,.4) 1px, transparent 1px);
             background-size: 48px 48px;
+            pointer-events: none;
         }
         .admin-map-tile {
             position: absolute;
-            width: 33.3334%;
-            height: 33.3334%;
+            width: 256px;
+            height: 256px;
+            max-width: none;
             object-fit: cover;
         }
         .admin-map-overlay {

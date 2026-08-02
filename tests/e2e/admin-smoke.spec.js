@@ -234,6 +234,16 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.locator('#tours-list-container .tour-item').filter({ hasText: 'LogiHERO Dev Budapest Route' }).click();
     await expect(page.locator('#tour-details-card')).toBeVisible();
     await expect(page.locator('#tour-map .admin-map-tile').first()).toBeVisible();
+    const tileBox = await page.locator('#tour-map').evaluate((map) => {
+        const tile = map.querySelector('.admin-map-tile');
+        const rect = tile ? tile.getBoundingClientRect() : null;
+        return rect ? { width: rect.width, height: rect.height } : null;
+    });
+    expect(tileBox).toBeTruthy();
+    expect(tileBox.width).toBeGreaterThan(250);
+    expect(tileBox.width).toBeLessThan(262);
+    expect(tileBox.height).toBeGreaterThan(250);
+    expect(tileBox.height).toBeLessThan(262);
     await expect(page.locator('#tour-map .admin-map-marker').first()).toBeVisible();
     const mapBox = await page.locator('#tour-map').boundingBox();
     expect(mapBox).toBeTruthy();
