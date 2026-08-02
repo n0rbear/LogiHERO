@@ -1,6 +1,8 @@
 const ACTIVE_STOP_STATUSES = new Set(['PENDING', 'NEXT', 'ARRIVED', 'IN_PROGRESS', 'PROBLEM']);
 const COMPLETED_STOP_STATUSES = new Set(['COMPLETED', 'SKIPPED']);
 const STALE_LOCATION_MS = 15 * 60 * 1000;
+const TERMINAL_MODES = new Set(['NONE', 'DEPOT', 'DRIVER_HOME']);
+const TERMINAL_DUPLICATE_TOLERANCE_KM = 0.05;
 
 function toNumber(value) {
     const parsed = Number(value);
@@ -35,6 +37,59 @@ function haversineKm(a, b) {
 function estimateDurationSeconds(distanceKm) {
     if (!Number.isFinite(distanceKm)) return null;
     return Math.round((distanceKm / 62) * 3600);
+}
+
+function normalizeTerminalMode(value) {
+    const mode = String(value || 'NONE').trim().toUpperCase();
+    return TERMINAL_MODES.has(mode) ? mode : null;
+}
+
+function resolveTerminal(tour = {}) {
+    const mode = normalizeTerminalMode(tour.terminal_mode || tour.terminalMode);
+    if (!mode) {
+        return { mode: 'INVALID', included: false, duplicate: false, diagnostic: 'INVALID_TERMINAL_MODE', point: null, label: 'Invalid terminal mode' };
+    }
+    if (mode === 'NONE') {
+        return { mode, included: false, duplicate: false, diagnostic: 'TERMINAL_NOT_CONFIGURED', point: null, label: 'No return terminal configured' };
+    }
+    if (mode === 'DRIVER_HOME') {
+        const homeLat = toNumber(tour.driver_home_lat ?? tour.home_lat);
+        const homeLng = toNumber(tour.driver_home_lng ?? tour.home_lng);
+        const baseLat = toNumber(tour.driver_base_lat ?? tour.base_lat);
+        const baseLng = toNumber(tour.driver_base_lng ?? tour.base_lng);
+        const latitude = homeLat ?? baseLat;
+        const longitude = homeLng ?? baseLng;
+        if (latitude === null || longitude === null) {
+            return { mode, included: false, duplicate: false, diagnostic: 'DRIVER_HOME_COORDINATES_MISSING', point: null, label: 'Driver home/base unavailable' };
+        }
+        return {
+            mode,
+            included: false,
+            duplicate: false,
+            diagnostic: 'OK',
+            point: { kind: 'DRIVER_HOME', latitude, longitude },
+            label: 'Driver home/base'
+        };
+    }
+    const latitude = toNumber(tour.return_depot_lat) ?? toNumber(tour.depot_lat);
+    const longitude = toNumber(tour.return_depot_lng) ?? toNumber(tour.depot_lng);
+    if (latitude === null || longitude === null) {
+        return { mode, included: false, duplicate: false, diagnostic: 'DEPOT_COORDINATES_MISSING', point: null, label: 'Depot unavailable' };
+    }
+    return {
+        mode,
+        included: false,
+        duplicate: false,
+        diagnostic: 'OK',
+        point: { kind: 'RETURN_DEPOT', latitude, longitude },
+        label: tour.return_depot_name || tour.depot_name || 'Return depot'
+    };
+}
+
+function isDuplicateTerminal(lastPoint, terminalPoint, toleranceKm = TERMINAL_DUPLICATE_TOLERANCE_KM) {
+    if (!lastPoint || !terminalPoint) return false;
+    const distance = haversineKm(lastPoint, terminalPoint);
+    return distance !== null && distance <= toleranceKm;
 }
 
 function getStopStatus(stop) {
@@ -104,12 +159,18 @@ function buildRoutePoints(tour, stops, startOverride) {
             points.push({ kind: 'STOP', stopId: stop.id, latitude: stop.latitude, longitude: stop.longitude });
         }
     }
-    const returnLat = toNumber(tour.return_depot_lat) ?? toNumber(tour.depot_lat);
-    const returnLng = toNumber(tour.return_depot_lng) ?? toNumber(tour.depot_lng);
-    if (returnLat !== null && returnLng !== null && (points.length === 0 || points[points.length - 1].latitude !== returnLat || points[points.length - 1].longitude !== returnLng)) {
-        points.push({ kind: 'RETURN_DEPOT', latitude: returnLat, longitude: returnLng });
+    const terminal = resolveTerminal(tour);
+    if (terminal.point) {
+        const duplicate = isDuplicateTerminal(points[points.length - 1], terminal.point);
+        terminal.duplicate = duplicate;
+        if (!duplicate) {
+            points.push({ ...terminal.point, terminalMode: terminal.mode, label: terminal.label });
+            terminal.included = true;
+        } else {
+            terminal.diagnostic = 'TERMINAL_DUPLICATE_OMITTED';
+        }
     }
-    return points;
+    return { points, terminal };
 }
 
 function fallbackLegs(points) {
@@ -123,10 +184,11 @@ function fallbackLegs(points) {
 
 async function calculateTourRoute(tour, rawStops, options = {}) {
     const stops = rawStops.map(normalizeStop).sort((a, b) => a.order_index - b.order_index);
-    const points = buildRoutePoints(tour, stops, options.startLocation);
+    const { points, terminal } = buildRoutePoints(tour, stops, options.startLocation);
     const warnings = [];
     const missingCoordinates = stops.filter(s => !isStopDone(s) && (s.latitude === null || s.longitude === null));
     if (missingCoordinates.length) warnings.push('MISSING_STOP_COORDINATES');
+    if (terminal.diagnostic && !['OK', 'TERMINAL_NOT_CONFIGURED', 'TERMINAL_DUPLICATE_OMITTED'].includes(terminal.diagnostic)) warnings.push(terminal.diagnostic);
 
     let route = null;
     let osrmError = null;
@@ -171,6 +233,7 @@ async function calculateTourRoute(tour, rawStops, options = {}) {
         route_error: osrmError,
         warnings,
         points,
+        terminal,
         legs,
         stops: enrichedStops
     };
@@ -179,6 +242,13 @@ async function calculateTourRoute(tour, rawStops, options = {}) {
 function calculateProgress(tour, rawStops, latestLocation) {
     const stops = rawStops.map(normalizeStop).sort((a, b) => a.order_index - b.order_index);
     const nextStop = getNextStop(stops);
+    const terminal = resolveTerminal(tour);
+    const activeOperationalStops = stops.filter(stop => !isStopDone(stop));
+    const lastActiveStop = activeOperationalStops[activeOperationalStops.length - 1] || null;
+    const terminalDistanceKm = terminal.point && lastActiveStop && !isDuplicateTerminal(lastActiveStop, terminal.point)
+        ? (haversineKm(lastActiveStop, terminal.point) || 0)
+        : 0;
+    const terminalDurationSeconds = estimateDurationSeconds(terminalDistanceKm) || 0;
     const completedDistance = stops
         .filter(isStopDone)
         .reduce((sum, stop) => sum + (stop.segment_distance_km || 0), 0);
@@ -198,16 +268,17 @@ function calculateProgress(tour, rawStops, latestLocation) {
     const plannedDistance = toNumber(tour.planned_distance_km) ?? stops.reduce((sum, stop) => sum + (stop.segment_distance_km || 0), 0);
     const plannedDuration = Number(tour.planned_duration_seconds || stops.reduce((sum, stop) => sum + (stop.segment_duration_seconds || 0), 0));
     const remainingDistance = distanceToNextStop !== null
-        ? distanceToNextStop + stops.filter(stop => !isStopDone(stop) && stop.id !== nextStop?.id).reduce((sum, stop) => sum + (stop.segment_distance_km || 0), 0)
-        : (toNumber(tour.remaining_distance_km) ?? remainingFromStops);
+        ? distanceToNextStop + stops.filter(stop => !isStopDone(stop) && stop.id !== nextStop?.id).reduce((sum, stop) => sum + (stop.segment_distance_km || 0), 0) + terminalDistanceKm
+        : (toNumber(tour.remaining_distance_km) ?? (remainingFromStops + terminalDistanceKm));
     const remainingDuration = durationToNextStop !== null
-        ? durationToNextStop + stops.filter(stop => !isStopDone(stop) && stop.id !== nextStop?.id).reduce((sum, stop) => sum + (stop.segment_duration_seconds || 0), 0)
-        : Number(tour.remaining_duration_seconds || 0);
+        ? durationToNextStop + stops.filter(stop => !isStopDone(stop) && stop.id !== nextStop?.id).reduce((sum, stop) => sum + (stop.segment_duration_seconds || 0), 0) + terminalDurationSeconds
+        : Number(tour.remaining_duration_seconds || terminalDurationSeconds || 0);
 
     return {
         tourId: tour.id,
         status: tour.tour_status || (tour.is_closed ? 'COMPLETED' : (tour.is_current ? 'IN_PROGRESS' : 'PLANNED')),
         nextStop,
+        terminal,
         plannedDistance,
         plannedDuration,
         completedDistance,
@@ -224,9 +295,13 @@ function calculateProgress(tour, rawStops, latestLocation) {
 module.exports = {
     calculateProgress,
     calculateTourRoute,
+    buildRoutePoints,
     getNextStop,
     isStopDone,
+    isDuplicateTerminal,
     navigationUrl,
     normalizeStop,
+    normalizeTerminalMode,
+    resolveTerminal,
     STALE_LOCATION_MS
 };

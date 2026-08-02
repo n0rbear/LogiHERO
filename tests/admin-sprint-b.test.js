@@ -353,7 +353,7 @@ test('Tour stop add, edit, reorder, delete, and recalculate use existing APIs', 
         calls.push({ sql, params });
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 };
         if (sql.includes('SELECT COALESCE(MAX(order_index)')) return { rows: [{ next: 1 }] };
-        if (sql.includes('SELECT * FROM tours WHERE id')) return { rows: [{ id: 1, name: 'Tour', driver_name: 'Driver', tour_status: 'PLANNED' }] };
+        if (sql.includes('FROM tours t') || sql.includes('SELECT * FROM tours WHERE id')) return { rows: [{ id: 1, name: 'Tour', driver_name: 'Driver', tour_status: 'PLANNED', terminal_mode: 'NONE' }] };
         if (sql.includes('SELECT * FROM stops WHERE tour_id')) {
             return { rows: [
                 { id: 2, order_index: 0, latitude: 47.5, longitude: 19.04, stop_status: 'PENDING' },
@@ -393,4 +393,56 @@ test('Tour stop add, edit, reorder, delete, and recalculate use existing APIs', 
     assert.ok(calls.some(c => c.sql.includes('UPDATE stops SET order_index')));
     assert.ok(calls.some(c => c.sql.includes('UPDATE stops SET deleted_at')));
     assert.ok(calls.some(c => c.sql.includes('UPDATE tours SET planned_distance_km')));
+});
+
+test('Tour terminal UI and API validation use virtual route-only model', async () => {
+    const calls = [];
+    const app = createApp(async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 };
+        if (sql.includes('FROM tours t')) {
+            return { rows: [{
+                id: 1,
+                name: 'Tour',
+                driver_name: 'Driver',
+                driver_uuid: '11111111-1111-4111-8111-111111111111',
+                tour_status: 'PLANNED',
+                terminal_mode: 'DRIVER_HOME',
+                driver_home_lat: params && params[0] === '2' ? null : 47.5,
+                driver_home_lng: params && params[0] === '2' ? null : 19.04,
+                depot_lat: 47.49,
+                depot_lng: 19.03
+            }] };
+        }
+        if (sql.includes('FROM tours')) return { rows: [{ id: 1, name: 'Tour', driver_name: 'Driver', tour_status: 'PLANNED', terminal_mode: 'DRIVER_HOME' }] };
+        if (sql.includes('FROM stops')) return { rows: [{ id: 2, order_index: 0, latitude: 47.6, longitude: 19.2, stop_status: 'PENDING' }] };
+        if (sql.includes('FROM cargo')) return { rows: [] };
+        if (sql.includes('SELECT latitude, longitude, speed')) return { rows: [] };
+        if (sql.includes('UPDATE tours SET name=COALESCE')) return { rows: [{ id: Number(params.at(-1)), terminal_mode: params[9] }], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
+    });
+
+    const page = await request(app, { path: '/admin/tours', headers: auth });
+    assert.equal(page.status, 200);
+    assert.match(page.text, /Tour terminal/);
+    assert.match(page.text, /name="terminal_mode"/);
+    assert.match(page.text, /Driver home\/base/);
+    assert.match(page.text, /terminal-marker/);
+
+    const saved = await request(app, { method: 'PATCH', path: '/api/tours/1', headers: auth, body: { terminal_mode: 'DRIVER_HOME' } });
+    assert.equal(saved.status, 200);
+    const savedBody = JSON.parse(saved.text);
+    assert.equal(savedBody.resolvedTerminal.mode, 'DRIVER_HOME');
+    assert.equal(savedBody.resolvedTerminal.diagnostic, 'OK');
+
+    const invalid = await request(app, { method: 'PATCH', path: '/api/tours/1', headers: auth, body: { terminal_mode: 'CUSTOM' } });
+    assert.equal(invalid.status, 400);
+    assert.equal(JSON.parse(invalid.text).error, 'INVALID_TERMINAL_MODE');
+
+    const unresolved = await request(app, { method: 'PATCH', path: '/api/tours/2', headers: auth, body: { terminal_mode: 'DRIVER_HOME' } });
+    assert.equal(unresolved.status, 400);
+    assert.equal(JSON.parse(unresolved.text).error, 'DRIVER_HOME_COORDINATES_MISSING');
+
+    assert.ok(calls.some(c => c.sql.includes('terminal_mode=COALESCE')));
+    assert.ok(!calls.some(c => c.sql.includes('INSERT INTO stops') && c.params?.includes('DRIVER_HOME')));
 });

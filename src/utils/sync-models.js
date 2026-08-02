@@ -9,7 +9,7 @@ const SYNC_TABLES = {
         entity: 'tours',
         table: 'tours',
         watermark: 'updated_at',
-        fields: ['uuid', 'company_uuid', 'driver_uuid', 'driver_name', 'name', 'customer', 'date', 'day_of_week', 'notes', 'is_closed', 'is_current', 'depot_name', 'depot_address_full', 'depot_lat', 'depot_lng', 'tour_status', 'route_status', 'created_at', 'updated_at', 'deleted_at', 'sync_state', 'revision']
+        fields: ['uuid', 'company_uuid', 'driver_uuid', 'driver_name', 'name', 'customer', 'date', 'day_of_week', 'notes', 'is_closed', 'is_current', 'depot_name', 'depot_address_full', 'depot_lat', 'depot_lng', 'return_depot_name', 'return_depot_address_full', 'return_depot_lat', 'return_depot_lng', 'terminal_mode', 'tour_status', 'route_status', 'created_at', 'updated_at', 'deleted_at', 'sync_state', 'revision']
     },
     stops: {
         entity: 'stops',

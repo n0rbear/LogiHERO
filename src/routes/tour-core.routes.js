@@ -16,6 +16,11 @@ function textOrNull(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function normalizeTerminalInput(body = {}) {
+    if (!Object.prototype.hasOwnProperty.call(body, 'terminal_mode') && !Object.prototype.hasOwnProperty.call(body, 'terminalMode')) return undefined;
+    return TourCore.normalizeTerminalMode(body.terminal_mode ?? body.terminalMode);
+}
+
 function sanitizeStopPayload(body) {
     const addressFull = textOrNull(body.address_full) || textOrNull(body.addressFull) || [body.street, body.house_number || body.houseNumber, body.postal_code || body.postalCode, body.city, body.country].filter(Boolean).join(' ');
     return {
@@ -45,7 +50,15 @@ function sanitizeStopPayload(body) {
 }
 
 async function getTourWithStops(client, id) {
-    const tourRes = await client.query('SELECT * FROM tours WHERE id = $1 AND deleted_at IS NULL', [id]);
+    const tourRes = await client.query(
+        `SELECT t.*, d.home_lat AS driver_home_lat, d.home_lng AS driver_home_lng,
+                d.base_lat AS driver_base_lat, d.base_lng AS driver_base_lng
+         FROM tours t
+         LEFT JOIN drivers d ON d.uuid = t.driver_uuid OR (t.driver_uuid IS NULL AND d.name = t.driver_name)
+         WHERE t.id = $1 AND t.deleted_at IS NULL
+         LIMIT 1`,
+        [id]
+    );
     const tour = tourRes.rows[0];
     if (!tour) return null;
     const stopsRes = await client.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC, id ASC', [id]);
@@ -91,8 +104,8 @@ async function latestLocation(client, tour) {
 async function persistRoute(client, tourId, route) {
     await client.query(
         `UPDATE tours SET planned_distance_km=$1, planned_duration_seconds=$2, route_polyline=$3::jsonb,
-         route_status=$4, route_error=$5, route_calculated_at=$6, updated_at=$6 WHERE id=$7`,
-        [route.planned_distance_km, route.planned_duration_seconds, route.route_polyline, route.route_status, route.route_error, route.route_calculated_at, tourId]
+         route_status=$4, route_error=$5, route_calculated_at=$6, updated_at=$6, remaining_distance_km=$7, remaining_duration_seconds=$8 WHERE id=$9`,
+        [route.planned_distance_km, route.planned_duration_seconds, route.route_polyline, route.route_status, route.route_error, route.route_calculated_at, route.planned_distance_km, route.planned_duration_seconds, tourId]
     );
     for (const stop of route.stops) {
         await client.query(
@@ -221,12 +234,18 @@ tourCoreRoutes.post('/api/tours', requireAdmin, requireAdminWrite, async (req, r
         const now = Date.now();
         const body = req.body || {};
         await client.query('BEGIN');
+        const requestedTerminalMode = normalizeTerminalInput(body);
+        if (requestedTerminalMode === null) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'INVALID_TERMINAL_MODE' });
+        }
+        const terminalMode = requestedTerminalMode || 'NONE';
         const created = await client.query(
             `INSERT INTO tours (driver_name, name, customer, date, notes, is_closed, is_current, depot_name,
              depot_address_full, depot_lat, depot_lng, return_depot_name, return_depot_address_full,
              return_depot_lat, return_depot_lng, vehicle, trailer, planned_start_at, planned_end_at,
-             tour_status, updated_at)
-             VALUES ($1,$2,$3,$4,$5,false,false,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             tour_status, terminal_mode, updated_at)
+             VALUES ($1,$2,$3,$4,$5,false,false,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
              RETURNING *`,
             [
                 textOrNull(body.driver_name || body.driverName),
@@ -247,9 +266,16 @@ tourCoreRoutes.post('/api/tours', requireAdmin, requireAdminWrite, async (req, r
                 numberOrNull(body.planned_start_at || body.plannedStartAt),
                 numberOrNull(body.planned_end_at || body.plannedEndAt),
                 textOrNull(body.tour_status || body.status) || 'PLANNED',
+                terminalMode,
                 now
             ]
         );
+        const createdData = await getTourWithStops(client, created.rows[0].id);
+        const terminal = TourCore.resolveTerminal(createdData.tour);
+        if (terminalMode !== 'NONE' && terminal.diagnostic !== 'OK') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: terminal.diagnostic, terminal });
+        }
         await client.query('COMMIT');
         await ndp.trackEvent({ traceId, eventType: 'tour_created', title: 'Tour created', component: 'backend', payload: { tourId: String(created.rows[0].id) } });
         res.status(201).json(created.rows[0]);
@@ -267,6 +293,11 @@ tourCoreRoutes.patch('/api/tours/:id', requireAdmin, requireAdminWrite, async (r
         const now = Date.now();
         const body = req.body || {};
         await client.query('BEGIN');
+        const terminalMode = normalizeTerminalInput(body);
+        if (terminalMode === null) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'INVALID_TERMINAL_MODE' });
+        }
 
         if (body.tour_status === 'COMPLETED' || body.status === 'COMPLETED' || body.is_closed) {
             const blockingCargo = await checkCargoBlocking(client, req.params.id);
@@ -306,17 +337,23 @@ tourCoreRoutes.patch('/api/tours/:id', requireAdmin, requireAdminWrite, async (r
             `UPDATE tours SET name=COALESCE($1,name), driver_name=COALESCE($2,driver_name), vehicle=COALESCE($3,vehicle),
              trailer=COALESCE($4,trailer), notes=COALESCE($5,notes), tour_status=COALESCE($6,tour_status),
              planned_start_at=COALESCE($7,planned_start_at), planned_end_at=COALESCE($8,planned_end_at),
-             is_closed=COALESCE($9,is_closed), updated_at=$10
-             WHERE id=$11 AND deleted_at IS NULL RETURNING *`,
-            [textOrNull(body.name), textOrNull(body.driver_name || body.driverName), textOrNull(body.vehicle), textOrNull(body.trailer), textOrNull(body.notes), textOrNull(body.tour_status || body.status), numberOrNull(body.planned_start_at || body.plannedStartAt), numberOrNull(body.planned_end_at || body.plannedEndAt), body.is_closed, now, req.params.id]
+             is_closed=COALESCE($9,is_closed), terminal_mode=COALESCE($10,terminal_mode), updated_at=$11
+             WHERE id=$12 AND deleted_at IS NULL RETURNING *`,
+            [textOrNull(body.name), textOrNull(body.driver_name || body.driverName), textOrNull(body.vehicle), textOrNull(body.trailer), textOrNull(body.notes), textOrNull(body.tour_status || body.status), numberOrNull(body.planned_start_at || body.plannedStartAt), numberOrNull(body.planned_end_at || body.plannedEndAt), body.is_closed, terminalMode, now, req.params.id]
         );
         if (!updated.rows[0]) {
             await client.query('ROLLBACK');
             return res.sendStatus(404);
         }
+        const validationData = await getTourWithStops(client, req.params.id);
+        const terminal = TourCore.resolveTerminal(validationData.tour);
+        if (terminalMode && terminalMode !== 'NONE' && terminal.diagnostic !== 'OK') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: terminal.diagnostic, terminal });
+        }
         await client.query('COMMIT');
         await ndp.trackEvent({ traceId: ndp.getTraceId(req), eventType: 'tour_updated', title: 'Tour updated', component: 'backend', payload: { tourId: String(req.params.id) } });
-        res.json(updated.rows[0]);
+        res.json({ ...updated.rows[0], resolvedTerminal: terminal });
     } catch (error) {
         await client.query('ROLLBACK');
         res.status(400).json({ error: error.message });
@@ -492,6 +529,7 @@ tourCoreRoutes.get('/api/tours/:id/route', async (req, res) => {
         plannedDuration: numberOrNull(data.tour.planned_duration_seconds),
         calculatedAt: numberOrNull(data.tour.route_calculated_at),
         error: data.tour.route_error,
+        terminal: TourCore.resolveTerminal(data.tour),
         stops: data.stops
     });
 });
@@ -607,6 +645,10 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
         .dispatcher-status { min-height:22px; color:var(--color-text-muted); font-size:12px; }
         .dispatcher-error { color:var(--color-error); font-weight:600; }
         .dispatcher-add-row { display:grid; grid-template-columns:140px repeat(4, minmax(120px,1fr)) auto; gap:8px; align-items:end; margin-top:12px; }
+        .terminal-panel { grid-column:1/-1; border:1px solid var(--color-border); border-radius:8px; padding:12px; background:#f8f9fa; }
+        .terminal-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; align-items:end; }
+        .terminal-diagnostic { margin-top:8px; color:var(--color-text-muted); font-size:12px; }
+        .terminal-warning { color:var(--color-error); font-weight:600; }
         @media (max-width: 1100px) {
             main.tour-main { grid-template-columns:1fr; height:auto; }
             .dispatcher-add-row { grid-template-columns:1fr 1fr; }
@@ -770,6 +812,9 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 if (d.stops.some(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(s.latitude) < 0.0001))) {
                     warnHtml += '<div style="color:var(--color-error); background:rgba(231,76,60,0.1); padding:8px; border-radius:4px; margin-bottom:8px; font-size:12px;">⚠️ <b>Hiányzó koordináta!</b> Az útvonal pontatlan lehet.</div>';
                 }
+                if (route.terminal && route.terminal.diagnostic && !['OK','TERMINAL_NOT_CONFIGURED','TERMINAL_DUPLICATE_OMITTED'].includes(route.terminal.diagnostic)) {
+                    warnHtml += '<div class="terminal-warning" style="background:rgba(231,76,60,0.1); padding:8px; border-radius:4px; margin-bottom:8px; font-size:12px;">Terminal warning: ' + esc(route.terminal.diagnostic) + '</div>';
+                }
                 document.getElementById('tour-warnings').innerHTML = warnHtml;
 
                 document.getElementById('tour-metrics').innerHTML = \`
@@ -809,6 +854,15 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                     bounds.push([h.latitude, h.longitude]);
                 });
 
+                const terminal = route.terminal || d.progress?.terminal;
+                if (terminal && terminal.point && terminal.diagnostic !== 'TERMINAL_DUPLICATE_OMITTED' && isDrawableCoord(terminal.point.latitude, terminal.point.longitude)) {
+                    const terminalIconText = terminal.mode === 'DRIVER_HOME' ? 'H' : 'D';
+                    const terminalLabel = terminal.mode === 'DRIVER_HOME' ? 'Driver home/base' : 'Return depot';
+                    const icon = L.divIcon({ html: '<div style="background:#064e3b;color:#fff;border:2px solid #34d399;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:13px;">' + terminalIconText + '</div>', iconSize: [28, 28], className: 'terminal-marker' });
+                    L.marker([terminal.point.latitude, terminal.point.longitude], { icon, markerType: 'terminal', className: 'terminal-marker' }).addTo(layer).bindPopup('<h4>' + esc(terminalLabel) + '</h4><p><b>Mode:</b> ' + esc(terminal.mode) + '</p><p>' + esc(terminal.label || terminalLabel) + '</p>');
+                    bounds.push([terminal.point.latitude, terminal.point.longitude]);
+                }
+
                 if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
             }
 
@@ -816,8 +870,10 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
                 const missing = (d.stops || []).filter(s => !s.is_completed && (!s.latitude || !s.longitude || Math.abs(Number(s.latitude)) < 0.0001));
                 const status = route && route.status ? String(route.status) : 'NOT_CALCULATED';
                 const error = route && route.error ? '<div style="color:var(--color-error); margin-top:6px;">' + esc(route.error) + '</div>' : '';
+                const terminal = route && route.terminal ? route.terminal : {};
+                const terminalLine = '<br><small>Terminal: ' + esc(terminal.mode || 'NONE') + ' / ' + esc(terminal.diagnostic || 'TERMINAL_NOT_CONFIGURED') + (terminal.included ? ' / included in route' : '') + (terminal.duplicate ? ' / duplicate omitted' : '') + '</small>';
                 const button = canWriteTour ? '<button id="route-recalc-button" class="btn btn-outline" onclick="recalculateSelectedRoute()">Route recalculation</button>' : '<span class="badge">Read-only</span>';
-                document.getElementById('tour-route-diagnostics').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px; align-items:center;"><div><b>Route status:</b> ' + esc(status) + '<br><small>Missing coordinates: ' + missing.length + '</small>' + error + '</div>' + button + '</div>';
+                document.getElementById('tour-route-diagnostics').innerHTML = '<div style="display:flex; justify-content:space-between; gap:12px; align-items:center;"><div><b>Route status:</b> ' + esc(status) + '<br><small>Missing coordinates: ' + missing.length + '</small>' + terminalLine + error + '</div>' + button + '</div>';
             }
 
             async function recalculateSelectedRoute() {
@@ -839,10 +895,17 @@ tourCoreRoutes.get('/admin/tours', requireAdmin, async (req, res) => {
             function renderTourEditPanel(d) {
                 const t = d.tour || {};
                 const stops = d.stops || [];
-                const writeControls = canWriteTour ? '<form id="tour-basic-form" class="tour-edit-grid"><input name="name" value="' + esc(t.name || '') + '" placeholder="Tour name"><input name="driver_name" value="' + esc(t.driver_name || '') + '" placeholder="Driver"><input name="vehicle" value="' + esc(t.vehicle || '') + '" placeholder="Vehicle"><input name="trailer" value="' + esc(t.trailer || '') + '" placeholder="Trailer"><select name="tour_status"><option>PLANNED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>CANCELLED</option></select><button class="btn btn-primary" type="submit">Save tour</button></form>' : '<div class="badge">Read-only admin</div>';
+                const terminal = d.progress?.terminal || {};
+                const terminalDiagnostic = '<div class="terminal-diagnostic' + (terminal.diagnostic && !['OK','TERMINAL_NOT_CONFIGURED','TERMINAL_DUPLICATE_OMITTED'].includes(terminal.diagnostic) ? ' terminal-warning' : '') + '">Resolved: ' + esc(terminal.label || 'No terminal') + ' / ' + esc(terminal.diagnostic || 'TERMINAL_NOT_CONFIGURED') + (terminal.duplicate ? ' / last stop already matches terminal' : '') + '</div>';
+                const terminalControls = canWriteTour
+                    ? '<div class="terminal-panel"><h4>Tour terminal</h4><div class="terminal-grid"><label>Terminal mode<select name="terminal_mode"><option value="NONE">No return terminal</option><option value="DEPOT">Depot / return depot</option><option value="DRIVER_HOME">Driver home/base</option></select></label><div>' + terminalDiagnostic + '</div></div></div>'
+                    : '<div class="terminal-panel"><h4>Tour terminal</h4><div><b>' + esc(t.terminal_mode || terminal.mode || 'NONE') + '</b></div>' + terminalDiagnostic + '<span class="badge">Read-only terminal</span></div>';
+                const writeControls = canWriteTour ? '<form id="tour-basic-form" class="tour-edit-grid"><input name="name" value="' + esc(t.name || '') + '" placeholder="Tour name"><input name="driver_name" value="' + esc(t.driver_name || '') + '" placeholder="Driver"><input name="vehicle" value="' + esc(t.vehicle || '') + '" placeholder="Vehicle"><input name="trailer" value="' + esc(t.trailer || '') + '" placeholder="Trailer"><select name="tour_status"><option>PLANNED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>CANCELLED</option></select>' + terminalControls + '<button class="btn btn-primary" type="submit">Save tour</button></form>' : '<div class="badge">Read-only admin</div>' + terminalControls;
                 document.getElementById('tour-edit-panel').innerHTML = '<div style="margin-top:16px;"><h4 style="margin-bottom:8px;">Edit foundation</h4>' + writeControls + renderDispatcherStopEditor(stops) + '</div>';
                 const status = document.querySelector('#tour-basic-form [name="tour_status"]');
                 if (status) status.value = t.tour_status || 'PLANNED';
+                const terminalSelect = document.querySelector('#tour-basic-form [name="terminal_mode"]');
+                if (terminalSelect) terminalSelect.value = t.terminal_mode || 'NONE';
                 document.getElementById('tour-basic-form')?.addEventListener('submit', saveTourBasics);
                 bindDispatcherEditor();
             }

@@ -260,9 +260,14 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.locator('#tour-map').dispatchEvent('mouseup', { clientX: mapBox.x + 112, clientY: mapBox.y + 62 });
     await expect.poll(async () => page.locator('#tour-map').getAttribute('data-center')).not.toBe(centerBeforePan);
     await page.locator('#tour-map .admin-map-fit-route').click();
+    await expect(page.locator('#tour-edit-panel')).toContainText('Tour terminal');
+    await page.locator('#tour-basic-form select[name="terminal_mode"]').selectOption('DEPOT');
+    await page.locator('#tour-basic-form button[type="submit"]').click();
+    await expect(page.locator('#tour-route-diagnostics')).toContainText('Terminal: DEPOT', { timeout: 15000 });
     await page.locator('#route-recalc-button').click();
     await expect(page.locator('#route-recalc-button')).toBeEnabled({ timeout: 15000 });
     await expect(page.locator('#tour-map .admin-map-route-polyline').first()).toBeVisible();
+    await expect(page.locator('#tour-map .admin-map-marker.terminal-marker')).toBeVisible();
     const hotelMarkers = page.locator('#tour-map .admin-map-marker.hotel-marker');
     await expect(hotelMarkers.first()).toBeVisible();
     await hotelMarkers.first().click();
@@ -301,6 +306,15 @@ test('read-only admin cannot write in real Chromium', async ({ page }) => {
         data: { name: 'Read only denied cargo' }
     });
     expect(deniedCargoCreate.status()).toBe(403);
+
+    await page.goto('/admin/tours');
+    await page.locator('#tours-list-container .tour-item').filter({ hasText: 'LogiHERO Dev Budapest Route' }).click();
+    await expect(page.locator('#tour-edit-panel')).toContainText('Tour terminal');
+    await expect(page.locator('#tour-basic-form select[name="terminal_mode"]')).toHaveCount(0);
+    const deniedTerminalUpdate = await page.request.patch('/api/tours/1', {
+        data: { terminal_mode: 'DEPOT' }
+    });
+    expect(deniedTerminalUpdate.status()).toBe(403);
 
     const directRotate = await page.request.post('/admin/drivers/11111111-1111-4111-8111-111111111111/devices/dev-device-active-1/rotate-token');
     expect(directRotate.status()).toBe(403);

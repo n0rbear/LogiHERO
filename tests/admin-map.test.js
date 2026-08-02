@@ -84,6 +84,14 @@ test('admin map tiles keep native OSM size instead of stretching to container fr
     assert.doesNotMatch(styles, /\.admin-map-tile\s*{[^}]*33\.3334%/s);
 });
 
+test('admin map render output supports distinct terminal markers', () => {
+    const script = renderAdminMapScript();
+    const styles = renderAdminMapStyles();
+
+    assert.match(script, /markerType/);
+    assert.match(styles, /\.admin-map-marker/);
+});
+
 test('admin map render output includes bounded zoom, drag, resize and fit-route lifecycle', () => {
     const script = renderAdminMapScript();
     const styles = renderAdminMapStyles();

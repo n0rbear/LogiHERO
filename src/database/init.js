@@ -451,6 +451,7 @@ const initDb = async () => {
         ['tours', 'route_status', 'TEXT DEFAULT \'NOT_CALCULATED\''],
         ['tours', 'route_error', 'TEXT'],
         ['tours', 'route_calculated_at', 'BIGINT'],
+        ['tours', 'terminal_mode', 'TEXT DEFAULT \'NONE\''],
         ['stops', 'company', 'TEXT'],
         ['stops', 'state', 'TEXT'],
         ['stops', 'country', 'TEXT'],
