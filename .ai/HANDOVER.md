@@ -4,9 +4,17 @@
 
 - Date: 2026-08-09.
 - Branch: `codex/logihero-ai-baseline-reconcile`.
-- Objective: secure only legacy mobile tour synchronization endpoints after the ZIP reconciliation baseline.
+- Objective: secure only mobile driver-photo and stop-photo upload ownership after the legacy tour sync ownership checkpoint.
 
 ## What changed in this checkpoint
+
+- `POST /api/upload-photo` now requires device authentication and only updates the authenticated driver's own profile photo.
+- `POST /api/upload-stop-photo` now requires device authentication, resolves stop and tour ownership server-side, and only updates stops owned by the authenticated driver.
+- Upload file writes now happen only after authentication and ownership checks pass.
+- Upload filenames are server-generated opaque names and are written with no-overwrite semantics.
+- Added focused Node regression coverage for owner uploads, missing/invalid credentials, cross-driver body tampering, cross-driver stop tampering, and denial paths that must not persist files or update rows.
+
+## Previous legacy tour sync checkpoint
 
 - `POST /api/sync-tours/:driverName` now requires device authentication and rejects path-driver mismatches before opening a database transaction.
 - `GET /api/get-tours/:driverName` now requires device authentication and rejects path-driver mismatches before reading tour data.
@@ -25,7 +33,6 @@
 
 - Broad backend sync authorization rewrite from the ZIP.
 - Driver enrollment/activation rewrite from the ZIP.
-- Driver photo and stop photo upload rewrites from the ZIP.
 - Legacy tour sync rewrite from the ZIP.
 - Device unlink result refactor from the ZIP.
 
@@ -33,7 +40,7 @@ Reason: those changes are broader than this baseline checkpoint and would overwr
 
 ## Required next validation
 
-- Focused legacy tour auth test.
+- Focused upload auth test.
 - Full Node test suite.
 - Integration test.
 - Typecheck.

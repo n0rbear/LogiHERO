@@ -14,11 +14,15 @@ Risk: cross-driver data disclosure or mutation.
 
 Next evidence needed: endpoint matrix, authenticated owner checks, response minimization, and negative tests for every remaining sensitive legacy route.
 
-### TD-002 - Driver and stop photo upload authorization is still incomplete
+### TD-002 - Remaining public upload and file lifecycle audit
 
-Current evidence: `src/routes/upload.routes.js` still trusts body `uuid`, `driverName`, and `stopUuid` before strong authenticated ownership checks. The reference ZIP contains claimed fixes and tests, but current code does not match those claims.
+Current evidence: `POST /api/upload-photo` and `POST /api/upload-stop-photo` now require `requireDeviceAuth`. Driver profile photo uploads only update the authenticated driver's row. Stop photo uploads resolve the stop and tour server-side, enforce authenticated driver and company ownership, and reject caller-controlled identity mismatches before file writes. Focused tests prove missing/invalid credentials, Driver A versus Driver B tampering, and denied requests with no file persistence or row update.
 
-Risk: caller-selected identity writes and public file lifecycle ambiguity.
+Remaining evidence: Other public/mobile routes still need a full endpoint-by-endpoint authorization audit, and the broader public file retention/cleanup policy is not yet documented as a complete lifecycle model.
+
+Risk: residual caller-selected identity writes on other endpoints and orphaned public files outside the newly protected denied-upload paths.
+
+Next evidence needed: endpoint matrix for remaining public/mobile routes and a file lifecycle policy for public uploads.
 
 ### TD-003 - Privileged Mistral key is still embedded into Android BuildConfig
 
