@@ -41,6 +41,23 @@ const PORT = process.env.PORT || 3000;
 const APP_COMMIT_SHA = process.env.APP_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'unknown';
 const APP_BUILD_TIME = process.env.APP_BUILD_TIME || 'unknown';
 const APP_VERSION = process.env.APP_VERSION || '';
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
+const MISTRAL_API_URL = process.env.MISTRAL_API_URL || 'https://api.mistral.ai/v1/chat/completions';
+
+function positiveIntEnv(name, fallback, min = 1) {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min) return fallback;
+    return value;
+}
+
+const AI_RATE_LIMIT_BURST_WINDOW_MS = positiveIntEnv('AI_RATE_LIMIT_BURST_WINDOW_MS', 60_000);
+const AI_RATE_LIMIT_BURST_MAX = positiveIntEnv('AI_RATE_LIMIT_BURST_MAX', 6);
+const AI_RATE_LIMIT_DRIVER_WINDOW_MS = positiveIntEnv('AI_RATE_LIMIT_DRIVER_WINDOW_MS', 60 * 60_000);
+const AI_RATE_LIMIT_DRIVER_MAX = positiveIntEnv('AI_RATE_LIMIT_DRIVER_MAX', 30);
+const AI_RATE_LIMIT_COMPANY_WINDOW_MS = positiveIntEnv('AI_RATE_LIMIT_COMPANY_WINDOW_MS', 60 * 60_000);
+const AI_RATE_LIMIT_COMPANY_MAX = positiveIntEnv('AI_RATE_LIMIT_COMPANY_MAX', 120);
 
 module.exports = {
     ADMIN_TOKEN,
@@ -60,5 +77,13 @@ module.exports = {
     PORT,
     APP_COMMIT_SHA,
     APP_BUILD_TIME,
-    APP_VERSION
+    APP_VERSION,
+    MISTRAL_API_KEY,
+    MISTRAL_API_URL,
+    AI_RATE_LIMIT_BURST_WINDOW_MS,
+    AI_RATE_LIMIT_BURST_MAX,
+    AI_RATE_LIMIT_DRIVER_WINDOW_MS,
+    AI_RATE_LIMIT_DRIVER_MAX,
+    AI_RATE_LIMIT_COMPANY_WINDOW_MS,
+    AI_RATE_LIMIT_COMPANY_MAX
 };

@@ -25,7 +25,7 @@ async function requireDeviceAuth(req, res, next) {
 
     try {
         const result = await pool.query(
-            `SELECT dd.*, d.is_active AS driver_active
+            `SELECT dd.*, d.is_active AS driver_active, d.name AS driver_name, d.company_uuid AS driver_company_uuid
              FROM driver_devices dd
              JOIN drivers d ON d.uuid = dd.driver_uuid
              WHERE dd.device_id = $1 AND dd.driver_uuid = $2
@@ -49,7 +49,7 @@ async function requireDeviceAuth(req, res, next) {
             console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=driver_disabled result=403`);
             return res.status(403).json({ error: 'DRIVER_DISABLED', credentialState: 'DRIVER_DISABLED' });
         }
-        req.deviceAuth = { deviceId, driverUuid, driverName: row.driver_name || null };
+        req.deviceAuth = { deviceId, driverUuid, driverName: row.driver_name || null, companyUuid: row.driver_company_uuid || null };
         await pool.query('UPDATE driver_devices SET last_seen_at = $1 WHERE device_id = $2', [Date.now(), deviceId]);
         return next();
     } catch (error) {

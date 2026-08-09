@@ -4,14 +4,12 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.driverassistant.data.api.AiChatRequest
+import com.example.driverassistant.data.api.AiMessage
 import com.example.driverassistant.data.api.BackendApi
-import com.example.driverassistant.data.api.MistralApi
-import com.example.driverassistant.data.api.MistralMessage
-import com.example.driverassistant.data.api.MistralRequest
 import com.example.driverassistant.domain.model.Cost
 import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.util.OCRUtils
-import com.example.driverassistant.util.AiAuth
 import com.google.gson.Gson
 import com.ndp.agent.NdpAgent
 import com.ndp.agent.NdpTraceContext
@@ -24,7 +22,6 @@ import javax.inject.Inject
 @HiltViewModel
 class CostsViewModel @Inject constructor(
     private val repository: DriverRepository,
-    private val mistralApi: MistralApi,
     private val backendApi: BackendApi,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -223,15 +220,14 @@ class CostsViewModel @Inject constructor(
                     }
                 """.trimIndent()
 
-                val response = mistralApi.chat(
-                    authHeader = AiAuth.mistralHeader(),
-                    request = MistralRequest(
+                val response = backendApi.chatWithAi(
+                    AiChatRequest(
                         model = "mistral-small-latest",
-                        messages = listOf(MistralMessage("user", prompt))
+                        messages = listOf(AiMessage("user", prompt))
                     )
                 )
 
-                val aiText = response.choices.firstOrNull()?.message?.content ?: ""
+                val aiText = response.content
                 val jsonStart = aiText.indexOf("{")
                 val jsonEnd = aiText.lastIndexOf("}")
                 

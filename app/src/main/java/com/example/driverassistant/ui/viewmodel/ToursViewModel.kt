@@ -6,10 +6,9 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.driverassistant.data.api.AiChatRequest
+import com.example.driverassistant.data.api.AiMessage
 import com.example.driverassistant.data.api.BackendApi
-import com.example.driverassistant.data.api.MistralApi
-import com.example.driverassistant.data.api.MistralMessage
-import com.example.driverassistant.data.api.MistralRequest
 import com.example.driverassistant.data.api.SetCurrentTourRequest
 import com.example.driverassistant.data.api.StopPhotoUploadRequest
 import com.example.driverassistant.domain.model.Hotel
@@ -17,7 +16,6 @@ import com.example.driverassistant.domain.model.Stop
 import com.example.driverassistant.domain.model.Tour
 import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.util.OCRUtils
-import com.example.driverassistant.util.AiAuth
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -28,7 +26,6 @@ import javax.inject.Inject
 @HiltViewModel
 class ToursViewModel @Inject constructor(
     private val repository: DriverRepository,
-    private val mistralApi: MistralApi,
     private val backendApi: BackendApi,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -373,12 +370,11 @@ class ToursViewModel @Inject constructor(
                     Csak a JSON-t küldd vissza, markdown blokkok nélkül!
                 """.trimIndent()
 
-                val response = mistralApi.chat(
-                    authHeader = AiAuth.mistralHeader(),
-                    request = MistralRequest(messages = listOf(MistralMessage("user", prompt)))
+                val response = backendApi.chatWithAi(
+                    AiChatRequest(messages = listOf(AiMessage("user", prompt)))
                 )
 
-                val aiText = response.choices.firstOrNull()?.message?.content ?: ""
+                val aiText = response.content
                 val cleanJson = aiText.removeSurrounding("```json", "```").trim()
                 
                 fun extractField(text: String, field: String): String {

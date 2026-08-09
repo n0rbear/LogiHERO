@@ -151,6 +151,21 @@ data class StopPhotoUploadResponse(
     val updatedAt: Long
 )
 
+data class AiMessage(
+    val role: String,
+    val content: String
+)
+
+data class AiChatRequest(
+    val model: String = "mistral-tiny",
+    val messages: List<AiMessage>,
+    val temperature: Double = 0.7
+)
+
+data class AiChatResponse(
+    val content: String
+)
+
 interface BackendApi {
     @GET("api/sync")
     suspend fun getDeltaSync(@Query("since") since: Long): DeltaSyncResponse
@@ -160,6 +175,9 @@ interface BackendApi {
 
     @GET("api/sync/version")
     suspend fun getSyncVersion(): SyncVersionResponse
+
+    @POST("api/ai/chat")
+    suspend fun chatWithAi(@Body request: AiChatRequest): AiChatResponse
 
     @GET("api/cost-status/{driverName}")
     suspend fun getCostStatus(@Path("driverName") driverName: String): List<CostStatusUpdate>

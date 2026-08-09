@@ -8,7 +8,6 @@ import com.example.driverassistant.data.api.*
 import com.example.driverassistant.domain.model.*
 import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.util.OCRUtils
-import com.example.driverassistant.util.AiAuth
 import android.location.Geocoder
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,7 +23,6 @@ import javax.inject.Inject
 @HiltViewModel
 class AIViewModel @Inject constructor(
     private val repository: DriverRepository,
-    private val mistralApi: MistralApi,
     private val backendApi: BackendApi,
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -164,15 +162,14 @@ class AIViewModel @Inject constructor(
                     }
                 """.trimIndent()
 
-                val response = mistralApi.chat(
-                    authHeader = AiAuth.mistralHeader(),
-                    request = MistralRequest(
-                        model = "mistral-small-latest", // Switching back to small for more literal extraction
-                        messages = listOf(MistralMessage("user", dispatchPrompt))
+                val response = backendApi.chatWithAi(
+                    AiChatRequest(
+                        model = "mistral-small-latest",
+                        messages = listOf(AiMessage("user", dispatchPrompt))
                     )
                 )
 
-                val aiText = response.choices.firstOrNull()?.message?.content ?: ""
+                val aiText = response.content
                 val jsonStart = aiText.indexOf("{")
                 val jsonEnd = aiText.lastIndexOf("}")
                 

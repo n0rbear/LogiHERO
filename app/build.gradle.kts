@@ -24,8 +24,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        val mistralApiKey = System.getenv("MISTRAL_API_KEY") ?: ""
-        buildConfigField("String", "MISTRAL_API_KEY", "\"${mistralApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         val ndpEndpoint = System.getenv("NDP_INGEST_ENDPOINT") ?: ""
         val ndpIngestKey = System.getenv("NDP_INGEST_KEY") ?: ""
         val ndpProjectId = System.getenv("NDP_PROJECT_ID") ?: "cms0g920d0001v1mom53he7pk"
@@ -112,6 +110,7 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
