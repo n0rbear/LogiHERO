@@ -260,9 +260,15 @@ driverProfileRoutes.post('/admin/delete-driver', requireAdmin, requireAdminWrite
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-driverReadRoutes.get('/api/all-drivers', async (req, res) => {
+driverReadRoutes.get('/api/all-drivers', requireAdmin, async (req, res) => {
     const result = await pool.query('SELECT * FROM drivers ORDER BY name ASC');
-    res.json(result.rows);
+    res.json(result.rows.map(row => ({
+        uuid: row.uuid,
+        name: row.name,
+        photo_url: row.photo_url,
+        license_plate: row.license_plate,
+        is_active: row.is_active
+    })));
 });
 
 module.exports = {

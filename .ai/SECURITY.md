@@ -15,10 +15,12 @@ Current source must be inspected before relying on any claim below.
 - Legacy mobile/public chat, current-tour, live-update, cost, work-time, profile/unlink, hotel, cargo, and Tour Core endpoints now require device authentication for mobile access and enforce server-derived authenticated driver/company ownership. Admin UI reads that depend on Tour/Hotel/Cargo APIs continue through admin-session compatibility.
 - Mobile cost sync no longer accepts dispatcher-owned approval/payment status from the client.
 - Mobile profile reads are response-minimized and no longer return activation/internal device credential fields.
+- `/driver/:name` is an authenticated admin/internal dashboard, not a public share URL.
+- `/api/live-status/:name`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` allow admin/session access or authenticated device access only for the server-derived owning driver.
+- `/api/fleet-status` and `/api/all-drivers` are admin-only; ordinary driver devices cannot read fleet-wide or driver-selector data.
 
 ## Known high-risk gaps from current source
 
-- Public driver dashboard APIs remain by-name browser diagnostics and still need a dedicated authentication/response-minimization design: `/driver/:name`, `/api/live-status/:name`, `/api/fleet-status`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName`.
 - Generic sync still needs a domain-invariant audit beyond ownership, because owner-scoped writes do not always pass through each domain route's lifecycle validation.
 - AI usage limiting is process-local and resets on backend restart; use a shared/durable limiter if deployment scales beyond one backend instance.
 - NDP runtime events may miss commit SHA correlation.

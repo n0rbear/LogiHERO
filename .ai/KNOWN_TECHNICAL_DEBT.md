@@ -4,15 +4,19 @@ Severity reflects current repository evidence as of 2026-08-09.
 
 ## Critical
 
-### TD-001 - Incomplete mobile/public API authorization
+No current CRITICAL security debt remains from the legacy mobile/public endpoint authorization inventory after the dashboard telemetry checkpoint. Re-open this section if a new endpoint inventory proves another public/mobile route can disclose or mutate another driver's/company's data without admin/session/device ownership.
 
-Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. `GET /api/sync` and `POST /api/sync` also require device authentication, scope reads/writes to the authenticated driver/company, reject cross-driver/cross-company payload tampering, and rollback generic sync batches on scope denial. The later mobile/public auth audit also protected legacy chat, current-tour, live-update, cost, work-time, profile/unlink, hotel, cargo, and Tour Core mobile/public endpoints with device authentication and server-derived owner scope where applicable. Focused regression tests prove missing/invalid credentials, unknown/revoked device handling, cross-driver path changes, generic sync read/write/create/delete denial, relation tampering denial, no partial unauthorized generic sync batch writes, legacy chat boundary, cost UUID/status boundary, profile response minimization, and hotel/cargo owner-only driver actions.
+## High
 
-Remaining evidence: Public driver dashboard APIs (`/driver/:name`, `/api/live-status/:name`, `/api/fleet-status`, `/api/get-history/:driverName/:date`, `/api/stats/:driverName`) still need a dedicated product decision because they are browser-facing by-name diagnostics without the mobile device credential model. The reference ZIP documents stronger fixes, but route-by-route source verification remains required before adopting any historical implementation.
+### TD-001 - Legacy mobile/public API authorization follow-up
 
-Risk: cross-driver data disclosure or mutation.
+Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. `GET /api/sync` and `POST /api/sync` also require device authentication, scope reads/writes to the authenticated driver/company, reject cross-driver/cross-company payload tampering, and rollback generic sync batches on scope denial. The mobile/public auth audit also protected legacy chat, current-tour, live-update, cost, work-time, profile/unlink, hotel, cargo, and Tour Core mobile/public endpoints with device authentication and server-derived owner scope where applicable. The dashboard telemetry checkpoint classified `/driver/:name`, `/api/live-status/:name`, `/api/fleet-status`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` as private/internal operational surfaces. `/driver/:name`, `/api/fleet-status`, and `/api/all-drivers` now require admin authentication; live-status/history/stats allow admin access or authenticated device access only for the owning driver. Focused regression tests prove missing/invalid credentials, unknown/revoked device handling, cross-driver path changes, generic sync read/write/create/delete denial, relation tampering denial, no partial unauthorized generic sync batch writes, legacy chat boundary, cost UUID/status boundary, profile response minimization, hotel/cargo owner-only driver actions, dashboard unauthenticated rejection, driver A/B telemetry denial, fleet denial to ordinary devices, and payload minimization.
 
-Next evidence needed: dedicated dispatcher/driver-dashboard authentication design, response minimization for dashboard telemetry, and negative tests for public by-name dashboard reads.
+Remaining evidence: No current route in the audited mobile/public inventory is known to allow cross-driver/company read or write purely by changing a caller-controlled name/ID. The reference ZIP should still be treated only as historical evidence.
+
+Risk: future regressions or new public endpoints bypassing the established admin/session/device ownership model.
+
+Next evidence needed: keep endpoint inventories current and add ownership tests when introducing any new public/mobile route.
 
 ### TD-002 - Remaining public upload and file lifecycle audit
 
@@ -33,8 +37,6 @@ Remaining evidence: No real Mistral provider smoke was run in this checkpoint. T
 Risk: provider availability/configuration drift and multi-instance/restart usage bursts.
 
 Next evidence needed: production provider smoke with a non-sensitive prompt and a shared/durable AI usage limiter if deployment scales beyond one backend instance.
-
-## High
 
 ### TD-004 - Remaining domain-specific sync invariant audit
 

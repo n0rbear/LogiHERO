@@ -3,6 +3,9 @@ const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
 const { ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
 
 function requireAdminOrDeviceAuth(req, res, next) {
+    if (req.headers['x-device-id'] || req.headers['x-device-token'] || req.headers['x-driver-uuid']) {
+        return requireDeviceAuth(req, res, next);
+    }
     requireAdmin(req, res, (adminError) => {
         if (adminError) return next(adminError);
         if (req.adminRole || (!ADMIN_TOKEN && !IS_DEPLOYED)) return next();

@@ -1,11 +1,16 @@
 const express = require('express');
 const pool = require('../database/pool');
+const { isAdminRequest, requireAdminOrDeviceAuth, requireOwnDriverName } = require('../utils/mobile-scope');
 
 const statsRoutes = express.Router();
 
-statsRoutes.get('/api/stats/:driverName', async (req, res) => {
+statsRoutes.get('/api/stats/:driverName', requireAdminOrDeviceAuth, async (req, res) => {
     try {
-        const driverName = req.params.driverName;
+        if (!isAdminRequest(req)) {
+            const denied = requireOwnDriverName(req, res, req.params.driverName);
+            if (denied) return denied;
+        }
+        const driverName = isAdminRequest(req) ? req.params.driverName : req.deviceAuth.driverName;
         const now = new Date();
         const today = now.toISOString().split('T')[0];
         const month = today.slice(0, 7);
@@ -32,7 +37,7 @@ statsRoutes.get('/api/stats/:driverName', async (req, res) => {
             tourMonthCount: Number(tours.count || 0)
         });
     } catch (e) {
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'STATS_READ_FAILED' });
     }
 });
 

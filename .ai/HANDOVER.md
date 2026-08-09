@@ -4,9 +4,20 @@
 
 - Date: 2026-08-09.
 - Branch: `codex/mobile-public-auth-audit`.
-- Objective: complete the mobile/public endpoint authorization inventory and secure confirmed remaining legacy mobile/public ownership gaps.
+- Objective: complete the product/security design review for the remaining by-name driver dashboard telemetry surface and implement the safest compatible access model.
 
 ## What changed in this checkpoint
+
+- The remaining dashboard telemetry routes were classified as private/internal operational dashboard surfaces, not public share links. No current source or docs showed a share-token product model.
+- `/driver/:name` now requires existing admin authentication. It is treated as an internal web dashboard, not a public driver-name URL.
+- `/api/live-status/:name`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` now allow admin/session access or authenticated device access only for the server-derived owning driver.
+- `/api/fleet-status` is admin-only. An ordinary authenticated driver device cannot read fleet-wide status.
+- `/api/all-drivers`, used by the dashboard driver selector, is admin-only and response-minimized to driver selector fields.
+- Live-status SQL no longer selects raw `live_updates.*`; it returns only the dashboard fields needed by the current UI.
+- Added focused dashboard/telemetry regression coverage for unauthenticated rejection, cross-driver denial, ordinary-device fleet denial, admin access, and payload minimization.
+- This closes the remaining CRITICAL legacy mobile/public authorization item in the current endpoint inventory. Remaining high risks are non-ownership follow-ups: domain invariant review, durable rate limiting, NDP commit correlation, startup schema mutation, production DB evidence, and public upload file lifecycle.
+
+## Previous mobile/public endpoint checkpoint
 
 - Added a shared mobile scope helper for authenticated-driver name, UUID, company, tour, hotel, and cargo ownership checks.
 - Legacy chat endpoints now require device authentication, reject path/body driver-name spoofing, and write chat messages using the server-derived driver name.

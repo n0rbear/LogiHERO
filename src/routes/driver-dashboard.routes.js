@@ -1,10 +1,11 @@
 const express = require('express');
 const pool = require('../database/pool');
+const requireAdmin = require('../middleware/requireAdmin');
 
 const createDriverDashboardRoutes = ({ escapeHtml, escapeJsString }) => {
     const driverDashboardRoutes = express.Router();
 
-driverDashboardRoutes.get('/driver/:name', async (req, res) => {
+driverDashboardRoutes.get('/driver/:name', requireAdmin, async (req, res) => {
     const name = req.params.name;
     const allD = (await pool.query('SELECT DISTINCT driver_name FROM (SELECT name as driver_name FROM drivers WHERE is_active = true UNION SELECT driver_name FROM live_updates UNION SELECT driver_name FROM tours) as d')).rows.map(r => r.driver_name).filter(n => n && n !== name);
     const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name])).rows[0] || { driver_name: name };
