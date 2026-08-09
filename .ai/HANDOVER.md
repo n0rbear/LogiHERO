@@ -4,9 +4,19 @@
 
 - Date: 2026-08-09.
 - Branch: `codex/logihero-ai-baseline-reconcile`.
-- Objective: secure only mobile driver-photo and stop-photo upload ownership after the legacy tour sync ownership checkpoint.
+- Objective: secure only generic `/api/sync` authentication and ownership after the mobile photo-upload ownership checkpoint.
 
 ## What changed in this checkpoint
+
+- `GET /api/sync` now requires device authentication and returns only records scoped to the authenticated driver/company.
+- `POST /api/sync` now requires device authentication, overwrites server-owned scope fields from `req.deviceAuth`, and rejects cross-driver/cross-company payload tampering.
+- Existing records are ownership-checked before revision conflict handling or upsert.
+- Related tour, stop, and work-day identifiers are validated server-side before generic sync writes.
+- Batch writes rollback and return `403 SYNC_SCOPE_DENIED` when any record is outside the authenticated scope, preventing partial unauthorized mutation.
+- Server-only fields such as activation codes, active flags, and admin approval/correction fields are removed from generic sync responses and writes.
+- Added focused Node regression coverage for authenticated own-scope sync, missing/invalid/unknown/revoked credentials, cross-driver read/write/create/delete attempts, relation tampering, cross-company tampering, and batch rollback.
+
+## Previous mobile photo-upload checkpoint
 
 - `POST /api/upload-photo` now requires device authentication and only updates the authenticated driver's own profile photo.
 - `POST /api/upload-stop-photo` now requires device authentication, resolves stop and tour ownership server-side, and only updates stops owned by the authenticated driver.

@@ -6,13 +6,13 @@ Severity reflects current repository evidence as of 2026-08-09.
 
 ### TD-001 - Incomplete mobile/public API authorization
 
-Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. Focused regression tests prove missing/invalid credentials and cross-driver path changes fail before data access or transaction start.
+Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. `GET /api/sync` and `POST /api/sync` also require device authentication, scope reads/writes to the authenticated driver/company, reject cross-driver/cross-company payload tampering, and rollback generic sync batches on scope denial. Focused regression tests prove missing/invalid credentials, unknown/revoked device handling, cross-driver path changes, generic sync read/write/create/delete denial, relation tampering denial, and no partial unauthorized generic sync batch writes.
 
-Remaining evidence: `src/routes/sync.routes.js` and several other legacy mobile routes still expose broad data or accept caller-controlled driver identity. The reference ZIP documents stronger fixes, but most of those backend changes are not present in current branch.
+Remaining evidence: Several other legacy mobile routes still expose broad data or accept caller-controlled driver identity. The reference ZIP documents stronger fixes, but most of those backend changes are not present in current branch.
 
 Risk: cross-driver data disclosure or mutation.
 
-Next evidence needed: endpoint matrix, authenticated owner checks, response minimization, and negative tests for every remaining sensitive legacy route.
+Next evidence needed: endpoint matrix, authenticated owner checks, response minimization, and negative tests for every remaining sensitive legacy route outside legacy tour sync, generic sync, and photo uploads.
 
 ### TD-002 - Remaining public upload and file lifecycle audit
 
@@ -32,9 +32,11 @@ Risk: distributed APK extraction, abuse, cost exposure, and uncontrolled AI data
 
 ## High
 
-### TD-004 - Generic delta sync can bypass domain invariants
+### TD-004 - Remaining domain-specific sync invariant audit
 
-Even when ownership is improved, generic writes can bypass route-specific business rules, audit events, transitions, and approval workflows unless each entity has an approved sync contract.
+Current evidence: Generic `/api/sync` now enforces authenticated driver/company scope, validates owned relations, rolls back scope-denied batches, and strips server-only activation/admin approval fields.
+
+Remaining evidence: Generic writes still upsert allowed owner-scoped entities directly rather than routing every mutation through each domain route's full validation/audit workflow. Additional domain-by-domain review is still needed for non-ownership invariants such as cargo transitions, hotel lifecycle, and work-time approval semantics.
 
 ### TD-005 - Startup schema mutation remains primary schema owner
 
