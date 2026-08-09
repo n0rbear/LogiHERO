@@ -2,6 +2,13 @@ const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const { requireAdminWrite } = require('../middleware/requireAdmin');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
+const {
+    ensureTourOwned,
+    isAdminRequest,
+    rejectScope,
+    requireAdminOrDeviceAuth
+} = require('../utils/mobile-scope');
 const ndp = require('../integrations/ndp-client');
 const TourCore = require('../engines/tour-core-engine');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
@@ -200,14 +207,24 @@ async function recalculateTour(client, tourId, traceId, reason = 'manual') {
 const HotelEngine = require('../engines/hotel-engine');
 const tourCoreRoutes = express.Router();
 
-tourCoreRoutes.get('/api/tours', async (_req, res) => {
+tourCoreRoutes.get('/api/tours', requireAdminOrDeviceAuth, async (req, res) => {
     try {
-        const result = await pool.query(
-            `SELECT *
-             FROM tours
-             WHERE deleted_at IS NULL
-             ORDER BY id DESC`
-        );
+        const result = isAdminRequest(req)
+            ? await pool.query(
+                `SELECT *
+                 FROM tours
+                 WHERE deleted_at IS NULL
+                 ORDER BY id DESC`
+            )
+            : await pool.query(
+                `SELECT *
+                 FROM tours
+                 WHERE deleted_at IS NULL
+                   AND (driver_uuid = $1::uuid OR (driver_uuid IS NULL AND driver_name = $2))
+                   AND ($3::uuid IS NULL OR company_uuid IS NULL OR company_uuid = $3::uuid)
+                 ORDER BY id DESC`,
+                [req.deviceAuth.driverUuid, req.deviceAuth.driverName, req.deviceAuth.companyUuid || null]
+            );
         res.json(result.rows);
     } catch (error) {
         console.error('[TOUR] list failed:', error.message);
@@ -215,8 +232,9 @@ tourCoreRoutes.get('/api/tours', async (_req, res) => {
     }
 });
 
-tourCoreRoutes.get('/api/tours/:id', async (req, res) => {
+tourCoreRoutes.get('/api/tours/:id', requireAdminOrDeviceAuth, async (req, res) => {
     try {
+        if (!isAdminRequest(req) && !(await ensureTourOwned(pool, req, req.params.id))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
         const data = await getTourWithStops(pool, req.params.id);
         if (!data) return res.sendStatus(404);
         const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
@@ -362,7 +380,8 @@ tourCoreRoutes.patch('/api/tours/:id', requireAdmin, requireAdminWrite, async (r
     }
 });
 
-tourCoreRoutes.get('/api/tours/:id/stops', async (req, res) => {
+tourCoreRoutes.get('/api/tours/:id/stops', requireAdminOrDeviceAuth, async (req, res) => {
+    if (!isAdminRequest(req) && !(await ensureTourOwned(pool, req, req.params.id))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
     const data = await getTourWithStops(pool, req.params.id);
     if (!data) return res.sendStatus(404);
     res.json(data.stops);
@@ -518,7 +537,8 @@ tourCoreRoutes.post('/api/tours/:id/recalculate-route', requireAdmin, requireAdm
     }
 });
 
-tourCoreRoutes.get('/api/tours/:id/route', async (req, res) => {
+tourCoreRoutes.get('/api/tours/:id/route', requireAdminOrDeviceAuth, async (req, res) => {
+    if (!isAdminRequest(req) && !(await ensureTourOwned(pool, req, req.params.id))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
     const data = await getTourWithStops(pool, req.params.id);
     if (!data) return res.sendStatus(404);
     res.json({
@@ -534,8 +554,9 @@ tourCoreRoutes.get('/api/tours/:id/route', async (req, res) => {
     });
 });
 
-tourCoreRoutes.get('/api/tours/:id/progress', async (req, res) => {
+tourCoreRoutes.get('/api/tours/:id/progress', requireAdminOrDeviceAuth, async (req, res) => {
     try {
+        if (!isAdminRequest(req) && !(await ensureTourOwned(pool, req, req.params.id))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
         const data = await getTourWithStops(pool, req.params.id);
         if (!data) return res.sendStatus(404);
         const progress = TourCore.calculateProgress(data.tour, data.stops, await latestLocation(pool, data.tour));
@@ -546,8 +567,9 @@ tourCoreRoutes.get('/api/tours/:id/progress', async (req, res) => {
     }
 });
 
-tourCoreRoutes.post('/api/tours/:id/location', async (req, res) => {
+tourCoreRoutes.post('/api/tours/:id/location', requireDeviceAuth, async (req, res) => {
     const traceId = ndp.getTraceId(req);
+    if (!(await ensureTourOwned(pool, req, req.params.id))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
     const data = await getTourWithStops(pool, req.params.id);
     if (!data) return res.sendStatus(404);
     if (textOrNull(req.body?.driverName) && req.body.driverName !== data.tour.driver_name) return res.sendStatus(403);
@@ -571,6 +593,10 @@ async function markStop(req, res, status) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        if (!(await ensureTourOwned(client, req, req.params.id))) {
+            await client.query('ROLLBACK');
+            return rejectScope(res, 'TOUR_SCOPE_DENIED');
+        }
 
         if (status === 'COMPLETED') {
             const blocking = await checkCargoBlocking(client, req.params.id, Number(req.params.stopId));
@@ -610,8 +636,8 @@ async function markStop(req, res, status) {
     }
 }
 
-tourCoreRoutes.post('/api/tours/:id/stops/:stopId/arrive', async (req, res) => markStop(req, res, 'ARRIVED'));
-tourCoreRoutes.post('/api/tours/:id/stops/:stopId/complete', async (req, res) => markStop(req, res, 'COMPLETED'));
+tourCoreRoutes.post('/api/tours/:id/stops/:stopId/arrive', requireDeviceAuth, async (req, res) => markStop(req, res, 'ARRIVED'));
+tourCoreRoutes.post('/api/tours/:id/stops/:stopId/complete', requireDeviceAuth, async (req, res) => markStop(req, res, 'COMPLETED'));
 
 const renderAdminLayout = require('../utils/admin-layout');
 

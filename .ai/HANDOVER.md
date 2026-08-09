@@ -3,10 +3,23 @@
 ## Current checkpoint
 
 - Date: 2026-08-09.
-- Branch: `codex/logihero-ai-baseline-reconcile`.
-- Objective: add a safe authenticated process-local usage limit for `POST /api/ai/chat`.
+- Branch: `codex/mobile-public-auth-audit`.
+- Objective: complete the mobile/public endpoint authorization inventory and secure confirmed remaining legacy mobile/public ownership gaps.
 
 ## What changed in this checkpoint
+
+- Added a shared mobile scope helper for authenticated-driver name, UUID, company, tour, hotel, and cargo ownership checks.
+- Legacy chat endpoints now require device authentication, reject path/body driver-name spoofing, and write chat messages using the server-derived driver name.
+- Legacy current-tour and live-update writes now require device authentication, reject cross-driver identity spoofing, and avoid returning raw backend error messages.
+- Legacy cost read/sync/status endpoints now require device authentication, scope queries to authenticated driver/company, minimize returned cost fields, prevent cross-driver UUID upserts, and prevent mobile clients from setting dispatcher-owned cost approval/payment status.
+- Legacy work-time read/sync endpoints now require device authentication and reject driver-name spoofing before reading or mutating records.
+- Mobile profile read/sync/unlink endpoints now require device authentication, restrict operations to the enrolled device/driver, remove the mobile path that could create arbitrary drivers, and minimize profile responses so activation/internal device fields are not returned.
+- Hotel read, sync, and driver status-transition endpoints now preserve admin-session reads while requiring device authentication and owner scope for mobile calls.
+- Cargo read and driver transition endpoints now preserve admin-session reads while requiring device authentication and tour/cargo/stop ownership for mobile calls.
+- Tour Core public read and driver-action endpoints now preserve admin-session reads while requiring device authentication and owner scope for mobile calls.
+- Added focused backend regression coverage for chat, cost, profile, hotel, and cargo mobile/public authorization boundaries.
+
+## Previous AI rate-limit checkpoint
 
 - `POST /api/ai/chat` now checks an authenticated AI usage policy after `requireDeviceAuth` and before any outbound Mistral call.
 - The limiter uses server-derived identity only: device ID plus driver UUID for burst, driver UUID for driver quota, and company UUID for company quota.

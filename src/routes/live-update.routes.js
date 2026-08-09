@@ -1,11 +1,16 @@
 const express = require('express');
 const pool = require('../database/pool');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
+const { requireOwnDriverName } = require('../utils/mobile-scope');
 
 const createLiveUpdateRoutes = ({ StatusEngine }) => {
     const liveUpdateRoutes = express.Router();
 
-    liveUpdateRoutes.post('/api/live-update', async (req, res) => {
+    liveUpdateRoutes.post('/api/live-update', requireDeviceAuth, async (req, res) => {
         const d = req.body;
+        const denied = requireOwnDriverName(req, res, d.driverName);
+        if (denied) return denied;
+        d.driverName = req.deviceAuth.driverName;
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
@@ -72,7 +77,7 @@ const createLiveUpdateRoutes = ({ StatusEngine }) => {
         } catch (e) {
             await client.query('ROLLBACK');
             console.error(`[TRACE-LIVE] Error: ${e.message}`);
-            res.status(500).send(e.message);
+            res.status(500).json({ error: 'LIVE_UPDATE_FAILED' });
         } finally {
             client.release();
         }

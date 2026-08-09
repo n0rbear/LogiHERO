@@ -5,6 +5,8 @@ const { requireAdminWrite } = require('../middleware/requireAdmin');
 const crypto = require('node:crypto');
 const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
 const { rateLimit } = require('../middleware/rate-limit');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
+const { requireOwnDriverName, requireOwnDriverUuid } = require('../utils/mobile-scope');
 
 const driverProfileRoutes = express.Router();
 const driverReadRoutes = express.Router();
@@ -16,6 +18,23 @@ const numberOrNull = (value) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
 };
+
+function mobileDriverProfile(row) {
+    return {
+        uuid: row.uuid,
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        whatsapp: row.whatsapp,
+        telegram: row.telegram,
+        licensePlate: row.license_plate,
+        photoUrl: row.photo_url,
+        isActive: !!row.is_active,
+        profileUpdatedAt: Number(row.profile_updated_at || row.updated_at || 0),
+        updatedAt: Number(row.updated_at || row.profile_updated_at || 0),
+        revision: Number(row.revision || 1)
+    };
+}
 
 function sanitizeAdminDriver(body) {
     const d = body || {};
@@ -69,21 +88,30 @@ driverProfileRoutes.post('/api/activate-driver', rateLimit({ name: 'driver-activ
     } catch (e) { res.status(500).send(e.message); }
 });
 
-driverProfileRoutes.post('/api/unlink-device', async (req, res) => {
+driverProfileRoutes.post('/api/unlink-device', requireDeviceAuth, async (req, res) => {
     const { uuid, deviceId } = req.body;
     if (!deviceId) return res.status(400).send('Missing deviceId');
+    if (uuid) {
+        const deniedUuid = requireOwnDriverUuid(req, res, uuid);
+        if (deniedUuid) return deniedUuid;
+    }
+    if (deviceId !== req.deviceAuth.deviceId) return res.status(403).json({ error: 'DEVICE_SCOPE_DENIED' });
     try {
-        if (uuid) {
-            await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE device_id = $2 AND driver_uuid = $3', [Date.now(), deviceId, uuid]);
-        } else {
-            await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE device_id = $2', [Date.now(), deviceId]);
-        }
+        await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE device_id = $2 AND driver_uuid = $3', [Date.now(), req.deviceAuth.deviceId, req.deviceAuth.driverUuid]);
         res.json({ success: true });
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { res.status(500).json({ error: 'DEVICE_UNLINK_FAILED' }); }
 });
 
-driverProfileRoutes.post('/api/sync-profile', async (req, res) => {
+driverProfileRoutes.post('/api/sync-profile', requireDeviceAuth, async (req, res) => {
     const d = req.body;
+    if (d.uuid) {
+        const deniedUuid = requireOwnDriverUuid(req, res, d.uuid);
+        if (deniedUuid) return deniedUuid;
+    }
+    if (d.name) {
+        const deniedName = requireOwnDriverName(req, res, d.name);
+        if (deniedName) return deniedName;
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -91,10 +119,10 @@ driverProfileRoutes.post('/api/sync-profile', async (req, res) => {
         // Először próbáljuk meg UUID alapján azonosítani, ha az app küldi
         let driverRes;
         if (d.uuid) {
-            driverRes = await client.query('SELECT * FROM drivers WHERE uuid = $1', [d.uuid]);
+            driverRes = await client.query('SELECT * FROM drivers WHERE uuid = $1 AND uuid = $2', [d.uuid, req.deviceAuth.driverUuid]);
         } else {
             // Ha nincs UUID, akkor név alapján keressük (visszafelé kompatibilitás)
-            driverRes = await client.query('SELECT * FROM drivers WHERE name = $1', [d.name]);
+            driverRes = await client.query('SELECT * FROM drivers WHERE uuid = $1 AND name = $2', [req.deviceAuth.driverUuid, req.deviceAuth.driverName]);
         }
 
         const driver = driverRes.rows[0];
@@ -105,13 +133,13 @@ driverProfileRoutes.post('/api/sync-profile', async (req, res) => {
             const serverUpdatedAt = Number(driver.profile_updated_at || 0);
             if (incomingUpdatedAt > 0 && serverUpdatedAt > incomingUpdatedAt) {
                 await client.query('ROLLBACK');
-                return res.status(409).json({ error: 'PROFILE_CHANGED_ON_SERVER', profile: driver });
+                return res.status(409).json({ error: 'PROFILE_CHANGED_ON_SERVER', profile: mobileDriverProfile(driver) });
             }
             const oldName = driver.name;
             await client.query(
                 `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=true, profile_updated_at=$8, updated_at=$8, sync_state='SYNCED', revision=COALESCE(revision,1)+1
                  WHERE uuid=$9`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, driver.uuid]
+                [req.deviceAuth.driverName, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, req.deviceAuth.driverUuid]
             );
 
             // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is
@@ -123,13 +151,8 @@ driverProfileRoutes.post('/api/sync-profile', async (req, res) => {
                 }
             }
         } else {
-            // Új sofőr beszúrása (csak ha tényleg nem létezik)
-            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-            await client.query(
-                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active, profile_updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, code, now]
-            );
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'DRIVER_NOT_FOUND' });
         }
 
         await client.query('COMMIT');
@@ -137,26 +160,30 @@ driverProfileRoutes.post('/api/sync-profile', async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[SYNC-PROFILE-ERROR] ${e.message}`);
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'PROFILE_SYNC_FAILED' });
     } finally {
         client.release();
     }
 });
 
-driverProfileRoutes.get('/api/get-profile/:name', async (req, res) => {
+driverProfileRoutes.get('/api/get-profile/:name', requireDeviceAuth, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM drivers WHERE name = $1', [req.params.name]);
+        const denied = requireOwnDriverName(req, res, req.params.name);
+        if (denied) return denied;
+        const result = await pool.query('SELECT * FROM drivers WHERE uuid = $1 AND name = $2', [req.deviceAuth.driverUuid, req.deviceAuth.driverName]);
         if (result.rows.length === 0) return res.status(404).send('Driver not found');
-        res.json(result.rows[0]);
-    } catch (e) { res.status(500).send(e.message); }
+        res.json(mobileDriverProfile(result.rows[0]));
+    } catch (e) { res.status(500).json({ error: 'PROFILE_READ_FAILED' }); }
 });
 
-driverProfileRoutes.get('/api/get-profile-by-uuid/:uuid', async (req, res) => {
+driverProfileRoutes.get('/api/get-profile-by-uuid/:uuid', requireDeviceAuth, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM drivers WHERE uuid = $1', [req.params.uuid]);
+        const denied = requireOwnDriverUuid(req, res, req.params.uuid);
+        if (denied) return denied;
+        const result = await pool.query('SELECT * FROM drivers WHERE uuid = $1', [req.deviceAuth.driverUuid]);
         if (result.rows.length === 0) return res.status(404).send('Driver not found');
-        res.json(result.rows[0]);
-    } catch (e) { res.status(500).send(e.message); }
+        res.json(mobileDriverProfile(result.rows[0]));
+    } catch (e) { res.status(500).json({ error: 'PROFILE_READ_FAILED' }); }
 });
 
 driverProfileRoutes.post('/admin/unlink-driver-devices', requireAdmin, requireAdminWrite, async (req, res) => {
