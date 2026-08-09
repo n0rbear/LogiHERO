@@ -24,15 +24,15 @@ Risk: residual caller-selected identity writes on other endpoints and orphaned p
 
 Next evidence needed: endpoint matrix for remaining public/mobile routes and a file lifecycle policy for public uploads.
 
-### TD-003 - Mistral provider access is server-side; production smoke/rate limiting remains
+### TD-003 - Mistral provider access is server-side; distributed limiting and production smoke remain
 
-Current evidence: Android no longer defines `BuildConfig.MISTRAL_API_KEY`, no longer contains `AiAuth`, no longer provides a direct Mistral Retrofit client, and no longer calls `api.mistral.ai` from production app source. Android AI call sites use authenticated `BackendApi.chatWithAi`. Backend `POST /api/ai/chat` requires `requireDeviceAuth`, uses server-side `MISTRAL_API_KEY`, rejects missing credentials safely, bounds upstream calls with a timeout, and returns only app-level content. Focused Node and Android JVM tests cover this boundary.
+Current evidence: Android no longer defines `BuildConfig.MISTRAL_API_KEY`, no longer contains `AiAuth`, no longer provides a direct Mistral Retrofit client, and no longer calls `api.mistral.ai` from production app source. Android AI call sites use authenticated `BackendApi.chatWithAi`. Backend `POST /api/ai/chat` requires `requireDeviceAuth`, uses server-side `MISTRAL_API_KEY`, rejects missing credentials safely, bounds upstream calls with a timeout, and returns only app-level content. It now also applies a process-local authenticated usage policy before provider calls: 6/min per device-driver burst, 30/hour per driver, and 120/hour per company by default. Focused Node and Android JVM tests cover this boundary.
 
-Remaining evidence: No real Mistral provider smoke was run in this checkpoint, and there is not yet a dedicated per-driver/company AI usage rate limit or billing guard beyond existing device authentication.
+Remaining evidence: No real Mistral provider smoke was run in this checkpoint. The AI limiter is process-local memory, not a shared durable limiter across multiple backend instances, and resets on process restart.
 
-Risk: provider availability/configuration drift and authenticated abuse volume.
+Risk: provider availability/configuration drift and multi-instance/restart usage bursts.
 
-Next evidence needed: production provider smoke with a non-sensitive prompt and a small authenticated rate-limit/usage policy for `/api/ai/chat`.
+Next evidence needed: production provider smoke with a non-sensitive prompt and a shared/durable AI usage limiter if deployment scales beyond one backend instance.
 
 ## High
 

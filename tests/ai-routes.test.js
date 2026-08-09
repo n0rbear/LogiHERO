@@ -5,7 +5,9 @@ const express = require('express');
 const { hashToken } = require('../src/middleware/requireDeviceAuth');
 
 const DRIVER_UUID = '11111111-1111-4111-8111-111111111111';
+const DRIVER_B_UUID = '22222222-2222-4222-8222-222222222222';
 const COMPANY_UUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const COMPANY_B_UUID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const SERVER_SECRET = 'server-side-mistral-secret-for-tests';
 
 function clearProjectModules() {
@@ -14,9 +16,9 @@ function clearProjectModules() {
     }
 }
 
-function authHeaders({ token = 'secret-a', driverUuid = DRIVER_UUID } = {}) {
+function authHeaders({ device = 'device-a', token = 'secret-a', driverUuid = DRIVER_UUID } = {}) {
     return {
-        'x-device-id': 'device-a',
+        'x-device-id': device,
         'x-device-token': token,
         'x-driver-uuid': driverUuid
     };
@@ -48,12 +50,24 @@ function request(app, { body, headers = {} } = {}) {
     });
 }
 
-function createApp({ apiKey = SERVER_SECRET, fetchImpl } = {}) {
+function createApp({ apiKey = SERVER_SECRET, fetchImpl, burstMax = 6, driverMax = 30, companyMax = 120, windowMs = 60_000 } = {}) {
     const oldKey = process.env.MISTRAL_API_KEY;
     const oldUrl = process.env.MISTRAL_API_URL;
+    const oldBurstMax = process.env.AI_RATE_LIMIT_BURST_MAX;
+    const oldBurstWindow = process.env.AI_RATE_LIMIT_BURST_WINDOW_MS;
+    const oldDriverMax = process.env.AI_RATE_LIMIT_DRIVER_MAX;
+    const oldDriverWindow = process.env.AI_RATE_LIMIT_DRIVER_WINDOW_MS;
+    const oldCompanyMax = process.env.AI_RATE_LIMIT_COMPANY_MAX;
+    const oldCompanyWindow = process.env.AI_RATE_LIMIT_COMPANY_WINDOW_MS;
     if (apiKey === null) delete process.env.MISTRAL_API_KEY;
     else process.env.MISTRAL_API_KEY = apiKey;
     process.env.MISTRAL_API_URL = 'https://mistral.test/v1/chat/completions';
+    process.env.AI_RATE_LIMIT_BURST_MAX = String(burstMax);
+    process.env.AI_RATE_LIMIT_BURST_WINDOW_MS = String(windowMs);
+    process.env.AI_RATE_LIMIT_DRIVER_MAX = String(driverMax);
+    process.env.AI_RATE_LIMIT_DRIVER_WINDOW_MS = String(windowMs);
+    process.env.AI_RATE_LIMIT_COMPANY_MAX = String(companyMax);
+    process.env.AI_RATE_LIMIT_COMPANY_WINDOW_MS = String(windowMs);
 
     clearProjectModules();
     const pool = require('../src/database/pool');
@@ -71,6 +85,19 @@ function createApp({ apiKey = SERVER_SECRET, fetchImpl } = {}) {
                         deleted_at: null,
                         driver_name: 'Driver A',
                         driver_company_uuid: COMPANY_UUID
+                    }],
+                    rowCount: 1
+                };
+            }
+            if (deviceId === 'device-b' && driverUuid === DRIVER_B_UUID) {
+                return {
+                    rows: [{
+                        device_token_hash: hashToken('secret-b'),
+                        is_active: true,
+                        driver_active: true,
+                        deleted_at: null,
+                        driver_name: 'Driver B',
+                        driver_company_uuid: COMPANY_B_UUID
                     }],
                     rowCount: 1
                 };
@@ -102,9 +129,24 @@ function createApp({ apiKey = SERVER_SECRET, fetchImpl } = {}) {
         else process.env.MISTRAL_API_KEY = oldKey;
         if (oldUrl === undefined) delete process.env.MISTRAL_API_URL;
         else process.env.MISTRAL_API_URL = oldUrl;
+        restoreEnv('AI_RATE_LIMIT_BURST_MAX', oldBurstMax);
+        restoreEnv('AI_RATE_LIMIT_BURST_WINDOW_MS', oldBurstWindow);
+        restoreEnv('AI_RATE_LIMIT_DRIVER_MAX', oldDriverMax);
+        restoreEnv('AI_RATE_LIMIT_DRIVER_WINDOW_MS', oldDriverWindow);
+        restoreEnv('AI_RATE_LIMIT_COMPANY_MAX', oldCompanyMax);
+        restoreEnv('AI_RATE_LIMIT_COMPANY_WINDOW_MS', oldCompanyWindow);
         global.fetch = previousFetch;
     }
     return { app, calls, cleanup };
+}
+
+function restoreEnv(name, value) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+}
+
+function validBody(extra = {}) {
+    return { messages: [{ role: 'user', content: 'Hello' }], ...extra };
 }
 
 test('authenticated device can invoke backend AI operation using server-side Mistral authorization', async () => {
@@ -135,7 +177,7 @@ test('missing and invalid device authentication are rejected before Mistral fetc
         try {
             const res = await request(ctx.app, {
                 headers,
-                body: { messages: [{ role: 'user', content: 'Hello' }] }
+                body: validBody()
             });
             assert.equal(res.status, 401);
             assert.equal(ctx.calls.some(call => call.fetchOptions), false);
@@ -150,7 +192,7 @@ test('missing server-side Mistral secret fails safely', async () => {
     try {
         const res = await request(ctx.app, {
             headers: authHeaders(),
-            body: { messages: [{ role: 'user', content: 'Hello' }] }
+            body: validBody()
         });
         assert.equal(res.status, 503);
         assert.equal(JSON.parse(res.text).error, 'AI_PROVIDER_UNAVAILABLE');
@@ -183,7 +225,7 @@ test('upstream timeout and error do not leak provider secret', async () => {
         try {
             const res = await request(ctx.app, {
                 headers: authHeaders(),
-                body: { messages: [{ role: 'user', content: 'Hello' }] }
+                body: validBody()
             });
             assert.equal(res.status, item.status, res.text);
             assert.equal(JSON.parse(res.text).error, item.error);
@@ -203,10 +245,89 @@ test('AI response contains only application content', async () => {
     try {
         const res = await request(ctx.app, {
             headers: authHeaders(),
-            body: { messages: [{ role: 'user', content: 'Hello' }] }
+            body: validBody()
         });
         assert.equal(res.status, 200, res.text);
         assert.deepEqual(JSON.parse(res.text), { content: 'answer' });
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+test('repeated authenticated AI requests hit the driver/device rate limit before Mistral fetch', async () => {
+    const ctx = createApp({ burstMax: 2, driverMax: 2, companyMax: 20 });
+    try {
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 200);
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 200);
+        const limited = await request(ctx.app, { headers: authHeaders(), body: validBody() });
+        assert.equal(limited.status, 429, limited.text);
+        assert.equal(JSON.parse(limited.text).error, 'AI_RATE_LIMITED');
+        assert.equal(ctx.calls.filter(call => call.fetchOptions).length, 2);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+test('Driver A usage does not consume Driver B AI allowance', async () => {
+    const ctx = createApp({ burstMax: 1, driverMax: 1, companyMax: 20 });
+    try {
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 200);
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 429);
+        const driverB = await request(ctx.app, {
+            headers: authHeaders({ device: 'device-b', token: 'secret-b', driverUuid: DRIVER_B_UUID }),
+            body: validBody()
+        });
+        assert.equal(driverB.status, 200, driverB.text);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+test('caller-controlled driver and company body fields cannot switch AI rate-limit identity', async () => {
+    const ctx = createApp({ burstMax: 1, driverMax: 1, companyMax: 20 });
+    try {
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody({ driverUuid: DRIVER_B_UUID, companyUuid: COMPANY_B_UUID }) })).status, 200);
+        const limited = await request(ctx.app, { headers: authHeaders(), body: validBody({ driverUuid: DRIVER_B_UUID, companyUuid: COMPANY_B_UUID }) });
+        assert.equal(limited.status, 429, limited.text);
+        assert.equal(ctx.calls.filter(call => call.fetchOptions).length, 1);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+test('expired AI rate-limit window allows usage again', async () => {
+    const originalNow = Date.now;
+    let now = 1_000_000;
+    Date.now = () => now;
+    const ctx = createApp({ burstMax: 1, driverMax: 1, companyMax: 20, windowMs: 1000 });
+    try {
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 200);
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 429);
+        now += 1001;
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 200);
+    } finally {
+        Date.now = originalNow;
+        ctx.cleanup();
+    }
+});
+
+test('malformed and provider-failing AI requests are accounted consistently', async () => {
+    const fetchCalls = [];
+    const ctx = createApp({
+        burstMax: 2,
+        driverMax: 2,
+        companyMax: 20,
+        fetchImpl: async (_url, options) => {
+            fetchCalls.push(options);
+            return { ok: false, status: 500, json: async () => ({}) };
+        }
+    });
+    try {
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: { messages: [] } })).status, 400);
+        assert.equal((await request(ctx.app, { headers: authHeaders(), body: validBody() })).status, 502);
+        const limited = await request(ctx.app, { headers: authHeaders(), body: validBody() });
+        assert.equal(limited.status, 429, limited.text);
+        assert.equal(fetchCalls.length, 1);
     } finally {
         ctx.cleanup();
     }

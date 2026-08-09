@@ -4,9 +4,20 @@
 
 - Date: 2026-08-09.
 - Branch: `codex/logihero-ai-baseline-reconcile`.
-- Objective: remove privileged Mistral provider credentials from production Android and move AI chat behind authenticated LogiHERO backend access.
+- Objective: add a safe authenticated process-local usage limit for `POST /api/ai/chat`.
 
 ## What changed in this checkpoint
+
+- `POST /api/ai/chat` now checks an authenticated AI usage policy after `requireDeviceAuth` and before any outbound Mistral call.
+- The limiter uses server-derived identity only: device ID plus driver UUID for burst, driver UUID for driver quota, and company UUID for company quota.
+- Default limits are 6 requests per minute per authenticated device/driver, 30 requests per hour per driver, and 120 requests per hour per company.
+- Limits are configurable with `AI_RATE_LIMIT_BURST_WINDOW_MS`, `AI_RATE_LIMIT_BURST_MAX`, `AI_RATE_LIMIT_DRIVER_WINDOW_MS`, `AI_RATE_LIMIT_DRIVER_MAX`, `AI_RATE_LIMIT_COMPANY_WINDOW_MS`, and `AI_RATE_LIMIT_COMPANY_MAX`.
+- Malformed limit config falls back to safe bounded defaults rather than unlimited behavior.
+- Rate-limited requests return `429` with `AI_RATE_LIMITED` and `Retry-After`, and they do not call Mistral.
+- The limiter is process-local memory with expired-bucket pruning. It is suitable for the current single-service process but is not distributed across multiple instances and resets on restart.
+- Added deterministic backend tests for normal usage, missing/invalid auth, limit exhaustion, provider-call prevention, Driver A/B isolation, body-spoofing resistance, window reset, and malformed/provider-failing accounting.
+
+## Previous Mistral backend migration checkpoint
 
 - Android no longer defines `BuildConfig.MISTRAL_API_KEY` or reads a privileged Mistral key from the app build.
 - Android no longer has a direct Mistral Retrofit client or `AiAuth` bearer-header helper.
