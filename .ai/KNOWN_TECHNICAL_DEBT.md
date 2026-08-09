@@ -6,11 +6,13 @@ Severity reflects current repository evidence as of 2026-08-09.
 
 ### TD-001 - Incomplete mobile/public API authorization
 
-Current evidence: `src/routes/sync.routes.js`, `src/routes/sync-tour.routes.js`, and several legacy mobile routes still expose broad data or accept caller-controlled driver identity. The reference ZIP documents stronger fixes, but most of those backend changes are not present in current `main`.
+Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. Focused regression tests prove missing/invalid credentials and cross-driver path changes fail before data access or transaction start.
+
+Remaining evidence: `src/routes/sync.routes.js` and several other legacy mobile routes still expose broad data or accept caller-controlled driver identity. The reference ZIP documents stronger fixes, but most of those backend changes are not present in current branch.
 
 Risk: cross-driver data disclosure or mutation.
 
-Next evidence needed: endpoint matrix, authenticated owner checks, response minimization, and negative tests for every sensitive legacy route.
+Next evidence needed: endpoint matrix, authenticated owner checks, response minimization, and negative tests for every remaining sensitive legacy route.
 
 ### TD-002 - Driver and stop photo upload authorization is still incomplete
 

@@ -4,9 +4,16 @@
 
 - Date: 2026-08-09.
 - Branch: `codex/logihero-ai-baseline-reconcile`.
-- Objective: compare the reference ZIP against current LogiHERO, preserve useful AI operating guidance, and reconcile only safe high-value changes.
+- Objective: secure only legacy mobile tour synchronization endpoints after the ZIP reconciliation baseline.
 
 ## What changed in this checkpoint
+
+- `POST /api/sync-tours/:driverName` now requires device authentication and rejects path-driver mismatches before opening a database transaction.
+- `GET /api/get-tours/:driverName` now requires device authentication and rejects path-driver mismatches before reading tour data.
+- `requireDeviceAuth` now exposes the authenticated driver's server-derived name and company UUID on `req.deviceAuth`.
+- Added focused Node regression coverage for owner GET/POST, unauthenticated rejection, invalid credential rejection, and Driver A versus Driver B path tampering.
+
+## Previous reconciliation checkpoint
 
 - Added root `AGENTS.md`.
 - Added current `.ai` baseline files.
@@ -26,8 +33,9 @@ Reason: those changes are broader than this baseline checkpoint and would overwr
 
 ## Required next validation
 
-- Node tests for current backend behavior.
-- Android JVM tests for the new credential boundary.
-- Type/syntax checks where available.
+- Focused legacy tour auth test.
+- Full Node test suite.
+- Integration test.
+- Typecheck.
 - Secret scan.
-- Android build if the local Android environment supports it.
+- Android JVM tests are not required unless Android source changes in this checkpoint.

@@ -1,11 +1,25 @@
 const express = require('express');
 const pool = require('../database/pool');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
 
 const tourRoutes = express.Router();
 
-tourRoutes.get('/api/get-tours/:driverName', async (req, res) => {
+function requireAuthenticatedDriverName(req, res) {
+    const authenticatedName = req.deviceAuth?.driverName;
+    const requestedName = req.params.driverName;
+    if (!authenticatedName || requestedName !== authenticatedName) {
+        console.log(`[DEVICE_AUTH] requestId=${req.requestId || 'unknown'} action=driver_scope_denied result=403 requested=${requestedName || 'n/a'} authenticated=${authenticatedName || 'n/a'}`);
+        res.status(403).json({ error: 'DRIVER_SCOPE_DENIED' });
+        return null;
+    }
+    return authenticatedName;
+}
+
+tourRoutes.get('/api/get-tours/:driverName', requireDeviceAuth, async (req, res, next) => {
+    const driverName = requireAuthenticatedDriverName(req, res);
+    if (!driverName) return;
     try {
-        const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [req.params.driverName]);
+        const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [driverName]);
         const results = [];
         for (let tour of toursRes.rows) {
             const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
@@ -30,7 +44,7 @@ tourRoutes.get('/api/get-tours/:driverName', async (req, res) => {
             });
         }
         res.json(results);
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { next(e); }
 });
 
 module.exports = tourRoutes;
