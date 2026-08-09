@@ -201,6 +201,26 @@ test('mobile profile reads require own identity and minimize privileged fields',
     assert.equal(body.device_token_hash, undefined);
 });
 
+test('mobile profile sync uses server-derived driver name for related-table cascade', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync-profile',
+        headers: authHeaders(),
+        body: {
+            uuid: DRIVER_A_UUID,
+            email: 'new@example.test',
+            profileUpdatedAt: 5
+        }
+    });
+    assert.equal(res.status, 200, res.text);
+    const profileUpdate = calls.find(call => call.sql.includes('UPDATE drivers SET name=$1'));
+    assert.equal(profileUpdate.params[0], 'Driver A');
+    const cascadeUpdates = calls.filter(call => call.sql.includes('UPDATE ') && call.sql.includes(' SET driver_name = $1 WHERE driver_name = $2'));
+    assert.equal(cascadeUpdates.length, 0);
+    assert.equal(calls.some(call => call.params.includes(undefined) && call.sql.includes('SET driver_name')), false);
+});
+
 test('hotel and cargo driver actions require owned records', async () => {
     const { app, calls } = createApp();
     const foreignHotel = await request(app, {

@@ -130,6 +130,7 @@ driverProfileRoutes.post('/api/sync-profile', requireDeviceAuth, async (req, res
         const now = Date.now();
 
         if (driver) {
+            const serverDriverName = req.deviceAuth.driverName;
             const serverUpdatedAt = Number(driver.profile_updated_at || 0);
             if (incomingUpdatedAt > 0 && serverUpdatedAt > incomingUpdatedAt) {
                 await client.query('ROLLBACK');
@@ -139,15 +140,15 @@ driverProfileRoutes.post('/api/sync-profile', requireDeviceAuth, async (req, res
             await client.query(
                 `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=true, profile_updated_at=$8, updated_at=$8, sync_state='SYNCED', revision=COALESCE(revision,1)+1
                  WHERE uuid=$9`,
-                [req.deviceAuth.driverName, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, req.deviceAuth.driverUuid]
+                [serverDriverName, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, req.deviceAuth.driverUuid]
             );
 
             // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is
-            if (oldName !== d.name) {
-                console.log(`[RENAME] Cascading name change: ${oldName} -> ${d.name}`);
+            if (oldName !== serverDriverName) {
+                console.log(`[RENAME] Cascading name change: ${oldName} -> ${serverDriverName}`);
                 const tables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
                 for (const t of tables) {
-                    await client.query(`UPDATE ${t} SET driver_name = $1 WHERE driver_name = $2`, [d.name, oldName]);
+                    await client.query(`UPDATE ${t} SET driver_name = $1 WHERE driver_name = $2`, [serverDriverName, oldName]);
                 }
             }
         } else {
