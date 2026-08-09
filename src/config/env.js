@@ -41,6 +41,8 @@ const PORT = process.env.PORT || 3000;
 const APP_COMMIT_SHA = process.env.APP_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'unknown';
 const APP_BUILD_TIME = process.env.APP_BUILD_TIME || 'unknown';
 const APP_VERSION = process.env.APP_VERSION || '';
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
+const MISTRAL_API_URL = process.env.MISTRAL_API_URL || 'https://api.mistral.ai/v1/chat/completions';
 
 module.exports = {
     ADMIN_TOKEN,
@@ -60,5 +62,7 @@ module.exports = {
     PORT,
     APP_COMMIT_SHA,
     APP_BUILD_TIME,
-    APP_VERSION
+    APP_VERSION,
+    MISTRAL_API_KEY,
+    MISTRAL_API_URL
 };

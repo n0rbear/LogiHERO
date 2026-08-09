@@ -2,7 +2,6 @@ package com.example.driverassistant.di
 
 import android.content.Context
 import com.example.driverassistant.data.api.BackendApi
-import com.example.driverassistant.data.api.MistralApi
 import com.example.driverassistant.data.api.OsrmApi
 import com.example.driverassistant.BuildConfig
 import com.example.driverassistant.data.security.BackendClientFactory
@@ -43,17 +42,6 @@ object NetworkModule {
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
-    }
-
-    @Provides
-    @Singleton
-    fun provideMistralApi(client: OkHttpClient): MistralApi {
-        return Retrofit.Builder()
-            .baseUrl("https://api.mistral.ai/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .client(client)
-            .build()
-            .create(MistralApi::class.java)
     }
 
     @Provides

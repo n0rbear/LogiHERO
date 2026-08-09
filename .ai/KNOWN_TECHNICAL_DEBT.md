@@ -24,11 +24,15 @@ Risk: residual caller-selected identity writes on other endpoints and orphaned p
 
 Next evidence needed: endpoint matrix for remaining public/mobile routes and a file lifecycle policy for public uploads.
 
-### TD-003 - Privileged Mistral key is still embedded into Android BuildConfig
+### TD-003 - Mistral provider access is server-side; production smoke/rate limiting remains
 
-Current evidence: `app/build.gradle.kts` writes `MISTRAL_API_KEY` into `BuildConfig`; `app/src/main/java/com/example/driverassistant/util/AiAuth.kt` turns it into a bearer header.
+Current evidence: Android no longer defines `BuildConfig.MISTRAL_API_KEY`, no longer contains `AiAuth`, no longer provides a direct Mistral Retrofit client, and no longer calls `api.mistral.ai` from production app source. Android AI call sites use authenticated `BackendApi.chatWithAi`. Backend `POST /api/ai/chat` requires `requireDeviceAuth`, uses server-side `MISTRAL_API_KEY`, rejects missing credentials safely, bounds upstream calls with a timeout, and returns only app-level content. Focused Node and Android JVM tests cover this boundary.
 
-Risk: distributed APK extraction, abuse, cost exposure, and uncontrolled AI data boundary.
+Remaining evidence: No real Mistral provider smoke was run in this checkpoint, and there is not yet a dedicated per-driver/company AI usage rate limit or billing guard beyond existing device authentication.
+
+Risk: provider availability/configuration drift and authenticated abuse volume.
+
+Next evidence needed: production provider smoke with a non-sensitive prompt and a small authenticated rate-limit/usage policy for `/api/ai/chat`.
 
 ## High
 

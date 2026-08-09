@@ -42,6 +42,7 @@ const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
 const syncRoutes = require('./src/routes/sync.routes');
 const workTimeRoutes = require('./src/routes/work-time.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
+const aiRoutes = require('./src/routes/ai.routes');
 const {
     requestIdMiddleware,
     securityHeadersMiddleware,
@@ -80,6 +81,7 @@ app.use(uploadRoutes);
 app.use(driverReadRoutes);
 app.use(createSyncTourRoutes({ ImportEngine }));
 app.use(syncRoutes);
+app.use(aiRoutes);
 app.use(workTimeRoutes);
 app.use(tourRoutes);
 app.use(tourCoreRoutes);

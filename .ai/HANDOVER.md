@@ -4,9 +4,20 @@
 
 - Date: 2026-08-09.
 - Branch: `codex/logihero-ai-baseline-reconcile`.
-- Objective: secure only generic `/api/sync` authentication and ownership after the mobile photo-upload ownership checkpoint.
+- Objective: remove privileged Mistral provider credentials from production Android and move AI chat behind authenticated LogiHERO backend access.
 
 ## What changed in this checkpoint
+
+- Android no longer defines `BuildConfig.MISTRAL_API_KEY` or reads a privileged Mistral key from the app build.
+- Android no longer has a direct Mistral Retrofit client or `AiAuth` bearer-header helper.
+- Android AI call sites now use the existing authenticated `BackendApi` client and call `POST /api/ai/chat`.
+- The backend added `POST /api/ai/chat`, protected by `requireDeviceAuth`.
+- Backend Mistral access uses only server-side `MISTRAL_API_KEY` from environment/config and a bounded upstream timeout.
+- The AI endpoint accepts only the app-level chat operation, ignores client-supplied provider credentials, returns only `{ content }`, and redacts provider failures behind safe error codes.
+- Added focused backend tests for auth, missing server secret, server-side provider authorization, timeout/error safety, and response minimization.
+- Added Android JVM regression coverage preventing privileged Mistral config or direct Mistral host access from returning to production Android source.
+
+## Previous generic sync checkpoint
 
 - `GET /api/sync` now requires device authentication and returns only records scoped to the authenticated driver/company.
 - `POST /api/sync` now requires device authentication, overwrites server-owned scope fields from `req.deviceAuth`, and rejects cross-driver/cross-company payload tampering.
@@ -50,9 +61,10 @@ Reason: those changes are broader than this baseline checkpoint and would overwr
 
 ## Required next validation
 
-- Focused upload auth test.
+- Focused backend AI route test.
 - Full Node test suite.
 - Integration test.
 - Typecheck.
 - Secret scan.
-- Android JVM tests are not required unless Android source changes in this checkpoint.
+- Android JVM tests.
+- Android build verification.

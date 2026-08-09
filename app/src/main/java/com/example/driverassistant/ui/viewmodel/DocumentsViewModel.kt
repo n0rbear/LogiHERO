@@ -4,14 +4,13 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.driverassistant.data.api.MistralApi
-import com.example.driverassistant.data.api.MistralMessage
-import com.example.driverassistant.data.api.MistralRequest
+import com.example.driverassistant.data.api.AiChatRequest
+import com.example.driverassistant.data.api.AiMessage
+import com.example.driverassistant.data.api.BackendApi
 import com.example.driverassistant.domain.model.Document
 import com.example.driverassistant.domain.model.Hotel
 import com.example.driverassistant.domain.repository.DriverRepository
 import com.example.driverassistant.util.OCRUtils
-import com.example.driverassistant.util.AiAuth
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +24,7 @@ import javax.inject.Inject
 @HiltViewModel
 class DocumentsViewModel @Inject constructor(
     private val repository: DriverRepository,
-    private val mistralApi: MistralApi,
+    private val backendApi: BackendApi,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -101,14 +100,13 @@ class DocumentsViewModel @Inject constructor(
                     Csak a JSON-t küldd vissza!
                 """.trimIndent()
 
-                val response = mistralApi.chat(
-                    authHeader = AiAuth.mistralHeader(),
-                    request = MistralRequest(
-                        messages = listOf(MistralMessage("user", prompt))
+                val response = backendApi.chatWithAi(
+                    AiChatRequest(
+                        messages = listOf(AiMessage("user", prompt))
                     )
                 )
 
-                val aiText = response.choices.firstOrNull()?.message?.content ?: ""
+                val aiText = response.content
                 val cleanJson = aiText.removeSurrounding("```json", "```").trim()
 
                 val name = extractField(cleanJson, "name")
