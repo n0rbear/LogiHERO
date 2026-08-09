@@ -4,6 +4,15 @@ const requireAdmin = require('../middleware/requireAdmin');
 const { requireAdminWrite } = require('../middleware/requireAdmin');
 const HotelEngine = require('../engines/hotel-engine');
 const ndp = require('../integrations/ndp-client');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
+const {
+    ensureTourOwned,
+    ensureHotelOwned,
+    isAdminRequest,
+    rejectScope,
+    requireAdminOrDeviceAuth,
+    requireOwnDriverName
+} = require('../utils/mobile-scope');
 
 const hotelManagementRoutes = express.Router();
 const hotelReadRoutes = express.Router();
@@ -81,10 +90,16 @@ function sanitizeHotel(body) {
 // TOUR-LINKED HOTEL ENDPOINTS
 // ==========================================
 
-hotelReadRoutes.get('/api/tours/:tourId/hotels', async (req, res) => {
+hotelReadRoutes.get('/api/tours/:tourId/hotels', requireAdminOrDeviceAuth, async (req, res) => {
     try {
+        if (!isAdminRequest(req) && !(await ensureTourOwned(pool, req, req.params.tourId))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
         const result = await pool.query(
-            'SELECT * FROM hotels WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC',
+            `SELECT id, uuid, tour_id, stop_id, driver_name, name, address_line_1, address_line_2, postal_code, city, country,
+                    latitude, longitude, phone, booking_number, booking_provider, check_in_date, check_in_time, check_out_date,
+                    check_out_time, number_of_nights, number_of_rooms, status, notes, street_view_url, external_map_url,
+                    contact_name, email, reservation_name, breakfast_included, parking_included, late_check_in, room_type,
+                    room_number, entry_code, created_at, updated_at, deleted_at, sync_state, revision
+             FROM hotels WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC`,
             [req.params.tourId]
         );
         res.json(result.rows);
@@ -109,9 +124,18 @@ hotelManagementRoutes.post('/api/tours/:tourId/hotels', requireAdmin, requireAdm
     }
 });
 
-hotelReadRoutes.get('/api/hotels/:hotelId', async (req, res) => {
+hotelReadRoutes.get('/api/hotels/:hotelId', requireAdminOrDeviceAuth, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM hotels WHERE id = $1', [req.params.hotelId]);
+        if (!isAdminRequest(req) && !(await ensureHotelOwned(pool, req, req.params.hotelId))) return rejectScope(res, 'HOTEL_SCOPE_DENIED');
+        const result = await pool.query(
+            `SELECT id, uuid, tour_id, stop_id, driver_name, name, address_line_1, address_line_2, postal_code, city, country,
+                    latitude, longitude, phone, booking_number, booking_provider, check_in_date, check_in_time, check_out_date,
+                    check_out_time, number_of_nights, number_of_rooms, status, notes, street_view_url, external_map_url,
+                    contact_name, email, reservation_name, breakfast_included, parking_included, late_check_in, room_type,
+                    room_number, entry_code, created_at, updated_at, deleted_at, sync_state, revision
+             FROM hotels WHERE id = $1`,
+            [req.params.hotelId]
+        );
         if (!result.rows[0]) return res.sendStatus(404);
         res.json(result.rows[0]);
     } catch (e) {
@@ -169,9 +193,10 @@ hotelManagementRoutes.delete('/api/hotels/:hotelId', requireAdmin, requireAdminW
 async function handleStatusChange(req, res, status) {
     const { reason, clientEventId, isOverride } = req.body;
     try {
+        if (!(await ensureHotelOwned(pool, req, req.params.hotelId))) return rejectScope(res, 'HOTEL_SCOPE_DENIED');
         const hotel = await HotelEngine.transitionHotelStatus(pool, req.params.hotelId, status, {
-            actorType: req.user ? 'ADMIN' : 'DRIVER',
-            actorId: req.user ? req.user.email : (req.body.driverName || 'unknown'),
+            actorType: 'DRIVER',
+            actorId: req.deviceAuth.driverUuid || req.deviceAuth.driverName,
             reason,
             clientEventId,
             isOverride
@@ -186,11 +211,11 @@ async function handleStatusChange(req, res, status) {
     }
 }
 
-hotelManagementRoutes.post('/api/hotels/:hotelId/confirm', async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CONFIRMED));
-hotelManagementRoutes.post('/api/hotels/:hotelId/check-in', async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CHECKED_IN));
-hotelManagementRoutes.post('/api/hotels/:hotelId/check-out', async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CHECKED_OUT));
-hotelManagementRoutes.post('/api/hotels/:hotelId/cancel', async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CANCELLED));
-hotelManagementRoutes.post('/api/hotels/:hotelId/report-problem', async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.PROBLEM));
+hotelManagementRoutes.post('/api/hotels/:hotelId/confirm', requireDeviceAuth, async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CONFIRMED));
+hotelManagementRoutes.post('/api/hotels/:hotelId/check-in', requireDeviceAuth, async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CHECKED_IN));
+hotelManagementRoutes.post('/api/hotels/:hotelId/check-out', requireDeviceAuth, async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CHECKED_OUT));
+hotelManagementRoutes.post('/api/hotels/:hotelId/cancel', requireDeviceAuth, async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.CANCELLED));
+hotelManagementRoutes.post('/api/hotels/:hotelId/report-problem', requireDeviceAuth, async (req, res) => handleStatusChange(req, res, HotelEngine.HOTEL_STATUSES.PROBLEM));
 
 // ==========================================
 // LEGACY & ADMIN ENDPOINTS (UPDATED)
@@ -252,15 +277,42 @@ hotelManagementRoutes.post('/admin/save-hotel-record', requireAdmin, requireAdmi
     }
 });
 
-hotelManagementRoutes.post('/api/sync-hotels', async (req, res) => {
+hotelManagementRoutes.post('/api/sync-hotels', requireDeviceAuth, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         for (const h of (req.body || [])) {
             const driverName = h.driverName || h.driver_name;
             if (!driverName || !h.name) continue;
+            const denied = requireOwnDriverName(req, res, driverName);
+            if (denied) {
+                await client.query('ROLLBACK');
+                return denied;
+            }
 
             const sanitized = sanitizeHotel(h);
+            sanitized.driverName = req.deviceAuth.driverName;
+            if (sanitized.tourId && !(await ensureTourOwned(client, req, sanitized.tourId))) {
+                await client.query('ROLLBACK');
+                return rejectScope(res, 'TOUR_SCOPE_DENIED');
+            }
+            if (h.uuid) {
+                const existing = await client.query(
+                    `SELECT h.id
+                     FROM hotels h
+                     LEFT JOIN tours t ON t.id = h.tour_id
+                     WHERE h.uuid::text = $1
+                       AND (h.driver_name = $2 OR t.driver_uuid = $3::uuid OR (t.driver_uuid IS NULL AND t.driver_name = $2))
+                       AND ($4::uuid IS NULL OR t.company_uuid IS NULL OR t.company_uuid = $4::uuid)
+                     LIMIT 1`,
+                    [h.uuid, req.deviceAuth.driverName, req.deviceAuth.driverUuid, req.deviceAuth.companyUuid || null]
+                );
+                const anyExisting = await client.query('SELECT id FROM hotels WHERE uuid::text = $1 LIMIT 1', [h.uuid]);
+                if (anyExisting.rowCount > 0 && existing.rowCount === 0) {
+                    await client.query('ROLLBACK');
+                    return rejectScope(res, 'HOTEL_SCOPE_DENIED');
+                }
+            }
 
             await client.query(`
                 INSERT INTO hotels (
@@ -292,14 +344,16 @@ hotelManagementRoutes.post('/api/sync-hotels', async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[SYNC-HOTELS-ERROR] ${e.message}`);
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'HOTEL_SYNC_FAILED' });
     } finally {
         client.release();
     }
 });
 
-hotelReadRoutes.get('/api/get-hotels/:driverName', async (req, res) => {
+hotelReadRoutes.get('/api/get-hotels/:driverName', requireDeviceAuth, async (req, res) => {
     try {
+        const denied = requireOwnDriverName(req, res, req.params.driverName);
+        if (denied) return denied;
         const result = await pool.query(
             `SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, driver_name::TEXT, name::TEXT, address_line_1::TEXT as address, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone::TEXT as phone_number, email::TEXT, notes::TEXT, updated_at::BIGINT as timestamp, status::TEXT
              FROM hotels
@@ -310,26 +364,28 @@ hotelReadRoutes.get('/api/get-hotels/:driverName', async (req, res) => {
              WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL)
                AND deleted_at IS NULL AND stop_type = 'HOTEL'
              ORDER BY timestamp DESC`,
-            [req.params.driverName]
+            [req.deviceAuth.driverName]
         );
         res.json(result.rows.map(h => ({ ...h, timestamp: Number(h.timestamp || Date.now()) })));
     } catch (e) {
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'HOTEL_READ_FAILED' });
     }
 });
 
-hotelReadRoutes.get('/api/get-manual-hotels/:driverName', async (req, res) => {
+hotelReadRoutes.get('/api/get-manual-hotels/:driverName', requireDeviceAuth, async (req, res) => {
     try {
+        const denied = requireOwnDriverName(req, res, req.params.driverName);
+        if (denied) return denied;
         const result = await pool.query(
             `SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, driver_name::TEXT, name::TEXT, address_line_1::TEXT as address, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone::TEXT as phone_number, email::TEXT, notes::TEXT, updated_at::BIGINT as timestamp, status::TEXT
              FROM hotels
              WHERE driver_name = $1 AND tour_id IS NULL AND deleted_at IS NULL
              ORDER BY updated_at DESC`,
-            [req.params.driverName]
+            [req.deviceAuth.driverName]
         );
         res.json(result.rows.map(h => ({ ...h, timestamp: Number(h.timestamp || Date.now()) })));
     } catch (e) {
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'HOTEL_READ_FAILED' });
     }
 });
 

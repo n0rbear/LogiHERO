@@ -4,25 +4,29 @@ Severity reflects current repository evidence as of 2026-08-09.
 
 ## Critical
 
-### TD-001 - Incomplete mobile/public API authorization
+No current CRITICAL security debt remains from the legacy mobile/public endpoint authorization inventory after the dashboard telemetry checkpoint. Re-open this section if a new endpoint inventory proves another public/mobile route can disclose or mutate another driver's/company's data without admin/session/device ownership.
 
-Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. `GET /api/sync` and `POST /api/sync` also require device authentication, scope reads/writes to the authenticated driver/company, reject cross-driver/cross-company payload tampering, and rollback generic sync batches on scope denial. Focused regression tests prove missing/invalid credentials, unknown/revoked device handling, cross-driver path changes, generic sync read/write/create/delete denial, relation tampering denial, and no partial unauthorized generic sync batch writes.
+## High
 
-Remaining evidence: Several other legacy mobile routes still expose broad data or accept caller-controlled driver identity. The reference ZIP documents stronger fixes, but most of those backend changes are not present in current branch.
+### TD-001 - Legacy mobile/public API authorization follow-up
 
-Risk: cross-driver data disclosure or mutation.
+Current evidence: `POST /api/sync-tours/:driverName` and `GET /api/get-tours/:driverName` now require `requireDeviceAuth` and reject a path `driverName` that differs from the authenticated driver's server-derived name. `GET /api/sync` and `POST /api/sync` also require device authentication, scope reads/writes to the authenticated driver/company, reject cross-driver/cross-company payload tampering, and rollback generic sync batches on scope denial. The mobile/public auth audit also protected legacy chat, current-tour, live-update, cost, work-time, profile/unlink, hotel, cargo, and Tour Core mobile/public endpoints with device authentication and server-derived owner scope where applicable. The dashboard telemetry checkpoint classified `/driver/:name`, `/api/live-status/:name`, `/api/fleet-status`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` as private/internal operational surfaces. `/driver/:name`, `/api/fleet-status`, and `/api/all-drivers` now require admin authentication; live-status/history/stats allow admin access or authenticated device access only for the owning driver. Focused regression tests prove missing/invalid credentials, unknown/revoked device handling, cross-driver path changes, generic sync read/write/create/delete denial, relation tampering denial, no partial unauthorized generic sync batch writes, legacy chat boundary, cost UUID/status boundary, profile response minimization, hotel/cargo owner-only driver actions, dashboard unauthenticated rejection, driver A/B telemetry denial, fleet denial to ordinary devices, and payload minimization.
 
-Next evidence needed: endpoint matrix, authenticated owner checks, response minimization, and negative tests for every remaining sensitive legacy route outside legacy tour sync, generic sync, and photo uploads.
+Remaining evidence: No current route in the audited mobile/public inventory is known to allow cross-driver/company read or write purely by changing a caller-controlled name/ID. The reference ZIP should still be treated only as historical evidence.
+
+Risk: future regressions or new public endpoints bypassing the established admin/session/device ownership model.
+
+Next evidence needed: keep endpoint inventories current and add ownership tests when introducing any new public/mobile route.
 
 ### TD-002 - Remaining public upload and file lifecycle audit
 
 Current evidence: `POST /api/upload-photo` and `POST /api/upload-stop-photo` now require `requireDeviceAuth`. Driver profile photo uploads only update the authenticated driver's row. Stop photo uploads resolve the stop and tour server-side, enforce authenticated driver and company ownership, and reject caller-controlled identity mismatches before file writes. Focused tests prove missing/invalid credentials, Driver A versus Driver B tampering, and denied requests with no file persistence or row update.
 
-Remaining evidence: Other public/mobile routes still need a full endpoint-by-endpoint authorization audit, and the broader public file retention/cleanup policy is not yet documented as a complete lifecycle model.
+Remaining evidence: The broader public file retention/cleanup policy is not yet documented as a complete lifecycle model.
 
-Risk: residual caller-selected identity writes on other endpoints and orphaned public files outside the newly protected denied-upload paths.
+Risk: orphaned public files outside the newly protected denied-upload paths.
 
-Next evidence needed: endpoint matrix for remaining public/mobile routes and a file lifecycle policy for public uploads.
+Next evidence needed: file lifecycle policy for public uploads.
 
 ### TD-003 - Mistral provider access is server-side; distributed limiting and production smoke remain
 
@@ -33,8 +37,6 @@ Remaining evidence: No real Mistral provider smoke was run in this checkpoint. T
 Risk: provider availability/configuration drift and multi-instance/restart usage bursts.
 
 Next evidence needed: production provider smoke with a non-sensitive prompt and a shared/durable AI usage limiter if deployment scales beyond one backend instance.
-
-## High
 
 ### TD-004 - Remaining domain-specific sync invariant audit
 

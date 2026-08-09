@@ -3,6 +3,14 @@ const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const { requireAdminWrite } = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
+const {
+    ensureCargoOwned,
+    ensureTourOwned,
+    isAdminRequest,
+    rejectScope,
+    requireAdminOrDeviceAuth
+} = require('../utils/mobile-scope');
 
 const cargoRoutes = express.Router();
 const CARGO_TYPES = new Set(['MACHINE', 'PALLET', 'BOX', 'PART', 'VEHICLE', 'EQUIPMENT', 'OTHER']);
@@ -113,10 +121,15 @@ async function validateStopLinkage(client, tourId, pickupId, deliveryId) {
 }
 
 // GET /api/tours/:tourId/cargo
-cargoRoutes.get('/api/tours/:tourId/cargo', async (req, res) => {
+cargoRoutes.get('/api/tours/:tourId/cargo', requireAdminOrDeviceAuth, async (req, res) => {
     try {
+        if (!isAdminRequest(req) && !(await ensureTourOwned(pool, req, req.params.tourId))) return rejectScope(res, 'TOUR_SCOPE_DENIED');
         const result = await pool.query(
-            'SELECT * FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC',
+            `SELECT id, uuid, tour_id, pickup_stop_id, delivery_stop_id, type, name, description, quantity, unit,
+                    serial_number, external_reference, customer_reference, weight_kg, length_cm, width_cm, height_cm,
+                    status, notes, driver_name, condition_at_pickup, condition_at_delivery, created_at, updated_at,
+                    deleted_at, sync_state, revision
+             FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC`,
             [req.params.tourId]
         );
         res.json(result.rows);
@@ -184,9 +197,17 @@ cargoRoutes.post('/api/tours/:tourId/cargo', requireAdmin, requireAdminWrite, as
 });
 
 // GET /api/cargo/:cargoId
-cargoRoutes.get('/api/cargo/:cargoId', async (req, res) => {
+cargoRoutes.get('/api/cargo/:cargoId', requireAdminOrDeviceAuth, async (req, res) => {
     try {
-        const cargo = await pool.query('SELECT * FROM cargo WHERE id = $1 AND deleted_at IS NULL', [req.params.cargoId]);
+        if (!isAdminRequest(req) && !(await ensureCargoOwned(pool, req, req.params.cargoId))) return rejectScope(res, 'CARGO_SCOPE_DENIED');
+        const cargo = await pool.query(
+            `SELECT id, uuid, tour_id, pickup_stop_id, delivery_stop_id, type, name, description, quantity, unit,
+                    serial_number, external_reference, customer_reference, weight_kg, length_cm, width_cm, height_cm,
+                    status, notes, driver_name, condition_at_pickup, condition_at_delivery, created_at, updated_at,
+                    deleted_at, sync_state, revision
+             FROM cargo WHERE id = $1 AND deleted_at IS NULL`,
+            [req.params.cargoId]
+        );
         if (cargo.rowCount === 0) return res.sendStatus(404);
         const events = await pool.query('SELECT * FROM cargo_events WHERE cargo_id = $1 ORDER BY timestamp ASC', [req.params.cargoId]);
         res.json({ ...cargo.rows[0], events: events.rows });
@@ -318,10 +339,14 @@ async function transitionCargo(req, res, eventType, fromStatuses, toStatus) {
     const client = await pool.connect();
     try {
         const { cargoId } = req.params;
-        const { stopId, reason, condition, metadata, driverName, clientEventId } = req.body;
+        const { stopId, reason, condition, metadata, clientEventId } = req.body;
         const now = Date.now();
 
         await client.query('BEGIN');
+        if (!(await ensureCargoOwned(client, req, cargoId))) {
+            await client.query('ROLLBACK');
+            return rejectScope(res, 'CARGO_SCOPE_DENIED');
+        }
         if (clientEventId) {
             const dup = await client.query('SELECT cargo_id FROM cargo_events WHERE client_event_id = $1', [clientEventId]);
             if (dup.rowCount > 0) {
@@ -334,6 +359,10 @@ async function transitionCargo(req, res, eventType, fromStatuses, toStatus) {
         const cargoRes = await client.query('SELECT status, tour_id FROM cargo WHERE id = $1 AND deleted_at IS NULL', [cargoId]);
         if (cargoRes.rowCount === 0) throw new Error('CARGO_NOT_FOUND');
         const cargo = cargoRes.rows[0];
+        if (stopId) {
+            const stopRes = await client.query('SELECT id FROM stops WHERE id = $1 AND tour_id = $2 AND deleted_at IS NULL LIMIT 1', [stopId, cargo.tour_id]);
+            if (stopRes.rowCount === 0) throw new Error('STOP_SCOPE_DENIED');
+        }
 
         if (!fromStatuses.includes(cargo.status)) {
             throw new Error(`INVALID_TRANSITION_${cargo.status}_TO_${toStatus}`);
@@ -353,7 +382,7 @@ async function transitionCargo(req, res, eventType, fromStatuses, toStatus) {
         await client.query(
             `INSERT INTO cargo_events (cargo_id, event_type, from_status, to_status, actor_type, actor_id, stop_id, timestamp, reason, metadata, client_event_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [cargoId, eventType, cargo.status, toStatus, 'DRIVER', driverName, stopId, now, reason, metadata, clientEventId]
+            [cargoId, eventType, cargo.status, toStatus, 'DRIVER', req.deviceAuth.driverUuid || req.deviceAuth.driverName, stopId, now, reason, metadata, clientEventId]
         );
 
         await client.query('COMMIT');
@@ -374,19 +403,19 @@ async function transitionCargo(req, res, eventType, fromStatuses, toStatus) {
     }
 }
 
-cargoRoutes.post('/api/cargo/:cargoId/pickup', async (req, res) => {
+cargoRoutes.post('/api/cargo/:cargoId/pickup', requireDeviceAuth, async (req, res) => {
     await transitionCargo(req, res, 'PICKED_UP', ['PLANNED', 'READY_FOR_PICKUP'], 'PICKED_UP');
 });
 
-cargoRoutes.post('/api/cargo/:cargoId/deliver', async (req, res) => {
+cargoRoutes.post('/api/cargo/:cargoId/deliver', requireDeviceAuth, async (req, res) => {
     await transitionCargo(req, res, 'DELIVERED', ['PICKED_UP', 'IN_TRANSIT'], 'DELIVERED');
 });
 
-cargoRoutes.post('/api/cargo/:cargoId/report-damage', async (req, res) => {
+cargoRoutes.post('/api/cargo/:cargoId/report-damage', requireDeviceAuth, async (req, res) => {
     await transitionCargo(req, res, 'DAMAGED_REPORTED', ['PICKED_UP', 'IN_TRANSIT', 'PLANNED', 'READY_FOR_PICKUP'], 'DAMAGED');
 });
 
-cargoRoutes.post('/api/cargo/:cargoId/report-missing', async (req, res) => {
+cargoRoutes.post('/api/cargo/:cargoId/report-missing', requireDeviceAuth, async (req, res) => {
     await transitionCargo(req, res, 'MISSING_REPORTED', ['PICKED_UP', 'IN_TRANSIT', 'PLANNED', 'READY_FOR_PICKUP'], 'MISSING');
 });
 

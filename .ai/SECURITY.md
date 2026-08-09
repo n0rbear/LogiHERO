@@ -12,10 +12,15 @@ Current source must be inspected before relying on any claim below.
 - Generic `GET /api/sync` and `POST /api/sync` require device authentication, scope reads/writes to the authenticated driver/company, reject relation tampering, strip server-only fields, and rollback scope-denied batches.
 - Android no longer carries a privileged Mistral client, `AiAuth`, or `BuildConfig.MISTRAL_API_KEY` path in production source.
 - `POST /api/ai/chat` is backend-only, requires `requireDeviceAuth`, uses server-side `MISTRAL_API_KEY`, and applies authenticated process-local AI rate limits before provider calls.
+- Legacy mobile/public chat, current-tour, live-update, cost, work-time, profile/unlink, hotel, cargo, and Tour Core endpoints now require device authentication for mobile access and enforce server-derived authenticated driver/company ownership. Admin UI reads that depend on Tour/Hotel/Cargo APIs continue through admin-session compatibility.
+- Mobile cost sync no longer accepts dispatcher-owned approval/payment status from the client.
+- Mobile profile reads are response-minimized and no longer return activation/internal device credential fields.
+- `/driver/:name` is an authenticated admin/internal dashboard, not a public share URL.
+- `/api/live-status/:name`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` allow admin/session access or authenticated device access only for the server-derived owning driver.
+- `/api/fleet-status` and `/api/all-drivers` are admin-only; ordinary driver devices cannot read fleet-wide or driver-selector data.
 
 ## Known high-risk gaps from current source
 
-- Several legacy mobile/public routes outside legacy tour sync, generic sync, and photo uploads still need an endpoint-by-endpoint authorization/response-minimization audit.
 - Generic sync still needs a domain-invariant audit beyond ownership, because owner-scoped writes do not always pass through each domain route's lifecycle validation.
 - AI usage limiting is process-local and resets on backend restart; use a shared/durable limiter if deployment scales beyond one backend instance.
 - NDP runtime events may miss commit SHA correlation.

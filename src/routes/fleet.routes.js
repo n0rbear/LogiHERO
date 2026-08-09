@@ -1,13 +1,23 @@
 const express = require('express');
 const pool = require('../database/pool');
+const requireAdmin = require('../middleware/requireAdmin');
+const { isAdminRequest, requireAdminOrDeviceAuth, requireOwnDriverName } = require('../utils/mobile-scope');
 
 const fleetRoutes = express.Router();
 
-fleetRoutes.get('/api/live-status/:name', async (req, res) => {
+fleetRoutes.get('/api/live-status/:name', requireAdminOrDeviceAuth, async (req, res) => {
     try {
         const name = req.params.name;
+        if (!isAdminRequest(req)) {
+            const denied = requireOwnDriverName(req, res, name);
+            if (denied) return denied;
+        }
         const updateRes = await pool.query(`
-            SELECT lu.*, d.photo_url as driver_photo, COALESCE(d.license_plate, lu.license_plate) as license_plate
+            SELECT lu.driver_name, lu.latitude, lu.longitude, lu.speed, lu.status, lu.current_tour, lu.next_stop,
+                   lu.next_lat, lu.next_lng, lu.next_stop_dist, lu.next_stop_duration,
+                   lu.tour_remaining_dist, lu.tour_remaining_duration, lu.depot_name, lu.depot_lat, lu.depot_lng,
+                   lu.timestamp, lu.include_rests, lu.next_break_in_seconds,
+                   d.photo_url as driver_photo, COALESCE(d.license_plate, lu.license_plate) as license_plate
             FROM live_updates lu
             LEFT JOIN drivers d ON d.name = lu.driver_name
             WHERE lu.driver_name = $1
@@ -27,7 +37,7 @@ fleetRoutes.get('/api/live-status/:name', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-fleetRoutes.get('/api/fleet-status', async (req, res) => {
+fleetRoutes.get('/api/fleet-status', requireAdmin, async (req, res) => {
     try {
         const drivers = await pool.query(`
             SELECT DISTINCT ON (all_drivers.driver_name)

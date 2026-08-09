@@ -2,15 +2,34 @@ const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
+const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
+const { ensureExistingUuidOwned, requireOwnDriverName } = require('../utils/mobile-scope');
 
 const costReadRoutes = express.Router();
 const costManagementRoutes = express.Router();
 
-costReadRoutes.get('/api/get-costs/:driverName', async (req, res) => {
+costReadRoutes.get('/api/get-costs/:driverName', requireDeviceAuth, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM costs WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY timestamp DESC', [req.params.driverName]);
+        const denied = requireOwnDriverName(req, res, req.params.driverName);
+        if (denied) return denied;
+        const result = await pool.query(
+            `SELECT uuid, driver_name, amount, currency, category, notes, mileage, photo_path, status, timestamp,
+                    created_at, updated_at, deleted_at, sync_state, revision
+             FROM costs
+             WHERE (driver_uuid = $1::uuid OR (driver_uuid IS NULL AND driver_name = $2))
+               AND ($3::uuid IS NULL OR company_uuid IS NULL OR company_uuid = $3::uuid)
+               AND deleted_at IS NULL
+             ORDER BY timestamp DESC`,
+            [req.deviceAuth.driverUuid, req.deviceAuth.driverName, req.deviceAuth.companyUuid || null]
+        );
         res.json(result.rows.map(r => ({
-            ...r,
+            uuid: r.uuid,
+            amount: Number(r.amount),
+            currency: r.currency,
+            category: r.category,
+            notes: r.notes,
+            mileage: r.mileage === null || r.mileage === undefined ? null : Number(r.mileage),
+            status: r.status,
             driverName: r.driver_name,
             photoPath: r.photo_path,
             timestamp: Number(r.timestamp),
@@ -20,10 +39,10 @@ costReadRoutes.get('/api/get-costs/:driverName', async (req, res) => {
             syncState: r.sync_state || 'SYNCED',
             revision: Number(r.revision || 1)
         })));
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { res.status(500).json({ error: 'COST_READ_FAILED' }); }
 });
 
-costManagementRoutes.post('/api/sync-costs', async (req, res) => {
+costManagementRoutes.post('/api/sync-costs', requireDeviceAuth, async (req, res) => {
     const traceId = ndp.getTraceId(req);
     const client = await pool.connect();
     const startedAt = Date.now();
@@ -40,24 +59,33 @@ costManagementRoutes.post('/api/sync-costs', async (req, res) => {
         });
         await client.query('BEGIN');
         for (const c of req.body) {
+            const denied = requireOwnDriverName(req, res, c.driverName || c.driver_name);
+            if (denied) {
+                await client.query('ROLLBACK');
+                return denied;
+            }
+            if (!(await ensureExistingUuidOwned(client, req, 'costs', c.uuid))) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({ error: 'COST_SCOPE_DENIED' });
+            }
             const now = Date.now();
-            await client.query(`INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, photo_path, status, timestamp, created_at, updated_at, deleted_at, sync_state, revision)
-                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'Rogzitve'), $10, $11, $11, $12, 'SYNCED', 1)
+            await client.query(`INSERT INTO costs (uuid, company_uuid, driver_uuid, driver_name, amount, currency, category, notes, mileage, photo_path, status, timestamp, created_at, updated_at, deleted_at, sync_state, revision)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, 'Rogzitve', $11, $12, $12, $13, 'SYNCED', 1)
                 ON CONFLICT (uuid) DO UPDATE SET
-                    driver_name = EXCLUDED.driver_name,
+                    company_uuid = COALESCE(costs.company_uuid, EXCLUDED.company_uuid),
+                    driver_uuid = COALESCE(costs.driver_uuid, EXCLUDED.driver_uuid),
                     amount = EXCLUDED.amount,
                     currency = EXCLUDED.currency,
                     category = EXCLUDED.category,
                     notes = EXCLUDED.notes,
                     mileage = EXCLUDED.mileage,
                     photo_path = EXCLUDED.photo_path,
-                    status = EXCLUDED.status,
                     timestamp = EXCLUDED.timestamp,
                     deleted_at = EXCLUDED.deleted_at,
                     updated_at = EXCLUDED.updated_at,
                     sync_state = 'SYNCED',
                     revision = COALESCE(costs.revision, 1) + 1`,
-                [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.photoPath || c.photo_path || null, c.status || null, c.timestamp, now, c.deletedAt || c.deleted_at || null]);
+                [c.uuid || null, req.deviceAuth.companyUuid || null, req.deviceAuth.driverUuid, req.deviceAuth.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.photoPath || c.photo_path || null, c.timestamp, now, c.deletedAt || c.deleted_at || null]);
         }
         await client.query('COMMIT');
         await ndp.trackEvent({
@@ -78,17 +106,24 @@ costManagementRoutes.post('/api/sync-costs', async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[SYNC-COSTS-ERROR] ${e.message}`);
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'COST_SYNC_FAILED' });
     } finally {
         client.release();
     }
 });
 
-costManagementRoutes.get('/api/cost-status/:driverName', async (req, res) => {
+costManagementRoutes.get('/api/cost-status/:driverName', requireDeviceAuth, async (req, res) => {
     try {
+        const denied = requireOwnDriverName(req, res, req.params.driverName);
+        if (denied) return denied;
         const result = await pool.query(
-            'SELECT id, uuid, status, timestamp, amount, revision, updated_at FROM costs WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY timestamp DESC',
-            [req.params.driverName]
+            `SELECT id, uuid, status, timestamp, amount, revision, updated_at
+             FROM costs
+             WHERE (driver_uuid = $1::uuid OR (driver_uuid IS NULL AND driver_name = $2))
+               AND ($3::uuid IS NULL OR company_uuid IS NULL OR company_uuid = $3::uuid)
+               AND deleted_at IS NULL
+             ORDER BY timestamp DESC`,
+            [req.deviceAuth.driverUuid, req.deviceAuth.driverName, req.deviceAuth.companyUuid || null]
         );
         res.json(result.rows.map(r => ({
             id: r.id,
@@ -100,7 +135,7 @@ costManagementRoutes.get('/api/cost-status/:driverName', async (req, res) => {
             updatedAt: Number(r.updated_at || r.timestamp || 0)
         })));
     } catch (e) {
-        res.status(500).send(e.message);
+        res.status(500).json({ error: 'COST_STATUS_READ_FAILED' });
     }
 });
 
