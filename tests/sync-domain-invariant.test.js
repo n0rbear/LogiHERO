@@ -11,7 +11,9 @@ const HOTEL_A_UUID = '88888888-8888-4888-8888-888888888888';
 const CARGO_A_UUID = '99999999-9999-4999-8999-999999999999';
 const WORK_DAY_LOCKED_UUID = 'aaaaaaaa-1111-4111-8111-111111111111';
 const WORK_DAY_OPEN_UUID = 'bbbbbbbb-1111-4111-8111-111111111111';
+const WORK_DAY_OPEN2_UUID = 'bbbbbbbb-2222-4222-8222-222222222222';
 const WORK_ENTRY_UUID = 'cccccccc-1111-4111-8111-111111111111';
+const WORK_ENTRY_OPEN_UUID = 'cccccccc-2222-4222-8222-222222222222';
 const TOUR_A_UUID = 'dddddddd-1111-4111-8111-111111111111';
 const STOP_A_UUID = 'eeeeeeee-1111-4111-8111-111111111111';
 
@@ -71,7 +73,9 @@ function createApp(options = {}) {
         hotelARow: { uuid: HOTEL_A_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', status: 'CHECKED_OUT', updated_at: 10, revision: 1 },
         workDayLockedRow: { uuid: WORK_DAY_LOCKED_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', approval_status: 'APPROVED', admin_note: null, anomaly_flags: [], updated_at: 10, revision: 1 },
         workDayOpenRow: { uuid: WORK_DAY_OPEN_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', approval_status: 'PENDING', admin_note: null, anomaly_flags: [], updated_at: 10, revision: 1 },
+        workDayOpen2Row: { uuid: WORK_DAY_OPEN2_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', approval_status: 'PENDING', admin_note: null, anomaly_flags: [], updated_at: 10, revision: 1 },
         workEntryRow: { uuid: WORK_ENTRY_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', work_day_uuid: WORK_DAY_LOCKED_UUID, updated_at: 10, revision: 1 },
+        workEntryOpenRow: { uuid: WORK_ENTRY_OPEN_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', work_day_uuid: WORK_DAY_OPEN_UUID, updated_at: 10, revision: 1 },
         tourARow: { uuid: TOUR_A_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', name: 'Tour A', tour_status: 'IN_PROGRESS', is_closed: false, updated_at: 10, revision: 1 },
         stopARow: { uuid: STOP_A_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, tour_id: 1, address: 'Stop A', stop_status: 'PENDING', is_completed: false, updated_at: 10, revision: 1 },
         ...options.state
@@ -105,6 +109,7 @@ function createApp(options = {}) {
             const workDayUuid = params[3];
             if (workDayUuid === WORK_DAY_LOCKED_UUID) return { rows: [state.workDayLockedRow], rowCount: 1 };
             if (workDayUuid === WORK_DAY_OPEN_UUID) return { rows: [state.workDayOpenRow], rowCount: 1 };
+            if (workDayUuid === WORK_DAY_OPEN2_UUID) return { rows: [state.workDayOpen2Row], rowCount: 1 };
             return { rows: [], rowCount: 0 };
         }
 
@@ -134,7 +139,9 @@ function createApp(options = {}) {
         }
         if (sql.startsWith('SELECT') && sql.includes('FROM work_time_entries')) {
             if (sql.includes('uuid::text = $1')) {
-                const row = params[0] === WORK_ENTRY_UUID ? state.workEntryRow : null;
+                const row = params[0] === WORK_ENTRY_UUID ? state.workEntryRow
+                    : params[0] === WORK_ENTRY_OPEN_UUID ? state.workEntryOpenRow
+                        : null;
                 return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
             }
         }
@@ -262,6 +269,67 @@ test('generic sync cannot mutate an entry belonging to an already-approved work 
     const body = JSON.parse(res.text);
     assert.equal(body.rejected[0].error, 'WORK_DAY_LOCKED');
     assert.equal(calls.some(call => call.sql.includes('INSERT INTO work_time_entries')), false);
+});
+
+test('generic sync cannot mutate an entry under an approved work day by omitting work_day_uuid', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync',
+        headers: authHeaders(),
+        // work_day_uuid / workDayUuid deliberately omitted: the stored parent of the
+        // existing entry is the approved work day and must stay authoritative.
+        body: { changes: { work_time_entries: [{ uuid: WORK_ENTRY_UUID, driverUuid: DRIVER_A_UUID, driverName: 'Driver A', companyUuid: COMPANY_A_UUID, status: 'WORK', startTime: 1, endTime: 2, revision: 1 }] } }
+    });
+    assert.equal(res.status, 200, res.text);
+    const body = JSON.parse(res.text);
+    assert.equal(body.rejected[0]?.error, 'WORK_DAY_LOCKED');
+    assert.equal(calls.some(call => call.sql.includes('INSERT INTO work_time_entries')), false);
+});
+
+test('generic sync cannot reparent an entry out of an approved work day into an open one', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync',
+        headers: authHeaders(),
+        // Existing entry's stored parent is the APPROVED day; client supplies an OPEN day instead.
+        body: { changes: { work_time_entries: [{ uuid: WORK_ENTRY_UUID, driverUuid: DRIVER_A_UUID, driverName: 'Driver A', companyUuid: COMPANY_A_UUID, workDayUuid: WORK_DAY_OPEN_UUID, status: 'WORK', revision: 1 }] } }
+    });
+    assert.equal(res.status, 200, res.text);
+    const body = JSON.parse(res.text);
+    assert.match(String(body.rejected[0]?.error), /WORK_DAY_LOCKED|WORK_DAY_REPARENT_NOT_SUPPORTED/);
+    assert.equal(calls.some(call => call.sql.includes('INSERT INTO work_time_entries')), false);
+});
+
+test('generic sync cannot move an entry between two open work days', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync',
+        headers: authHeaders(),
+        // Stored parent is open (so the lock check passes) but the client points the entry
+        // at a different open day: the reparent itself must still be refused.
+        body: { changes: { work_time_entries: [{ uuid: WORK_ENTRY_OPEN_UUID, driverUuid: DRIVER_A_UUID, driverName: 'Driver A', companyUuid: COMPANY_A_UUID, workDayUuid: WORK_DAY_OPEN2_UUID, status: 'WORK', revision: 1 }] } }
+    });
+    assert.equal(res.status, 200, res.text);
+    const body = JSON.parse(res.text);
+    assert.equal(body.rejected[0]?.error, 'WORK_DAY_REPARENT_NOT_SUPPORTED');
+    assert.equal(calls.some(call => call.sql.includes('INSERT INTO work_time_entries')), false);
+});
+
+test('generic sync still allows updating an entry under an open work day', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync',
+        headers: authHeaders(),
+        body: { changes: { work_time_entries: [{ uuid: WORK_ENTRY_OPEN_UUID, driverUuid: DRIVER_A_UUID, driverName: 'Driver A', companyUuid: COMPANY_A_UUID, workDayUuid: WORK_DAY_OPEN_UUID, status: 'WORK', revision: 1 }] } }
+    });
+    assert.equal(res.status, 200, res.text);
+    const body = JSON.parse(res.text);
+    assert.equal(body.rejected.length, 0, res.text);
+    assert.equal(calls.some(call => call.sql.includes('INSERT INTO work_time_entries')), true);
 });
 
 test('generic sync cannot set tour_status or is_closed on an existing tour (bypassing completion-blocking)', async () => {

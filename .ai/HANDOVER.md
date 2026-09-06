@@ -4,6 +4,25 @@
 
 - Date: 2026-09-06.
 - Branch: `claude/sync-domain-invariant-audit`.
+- Objective: verify a pre-merge review finding that the `work_time_entries` approved-work-day guard added earlier in this branch was itself bypassable, and close it before TD-004 may be claimed complete.
+
+## What changed in this checkpoint
+
+- **Both reported bypasses reproduced against the then-current branch head `05f356a`** with regression tests written first. In both cases the push completed with `result=ok` and the row was written, with nothing in `rejected`:
+  - **Case 1 (omitted parent):** the lock check lived only in `assertOwnedRelations`, gated on `if (workDayUuid && …)` reading the *incoming* record. A client updating an existing entry that belongs to an APPROVED day simply omitted `work_day_uuid`, the gate never fired, and the remaining fields were written through the `ON CONFLICT` update.
+  - **Case 2 (parent substitution):** supplying a *different, open* day's UUID made the check validate that open day instead of the entry's real parent, so the entry escaped its locked day and was reparented.
+  - Root cause for both: the guard trusted a client-supplied relation to decide whether an existing row was editable, and never consulted `existing.work_day_uuid`.
+- Checked the dedicated route before choosing the fix: `correctEntry()` in `src/routes/work-time.routes.js` guards with `assertAndroidMayWriteWorkDay(client, req, entry.work_day_uuid, …)` — the **stored** parent — and scopes its overlap check, audit and recalc to `entry.work_day_uuid` as well. Its UPDATE never touches `work_day_uuid`, and entries are only ever created server-side (`start-day`, `change-status`) with a server-resolved parent. So no dedicated contract permits reparenting an existing entry.
+- Fix in `src/routes/sync.routes.js`, narrow and mirroring that contract:
+  - Extracted `loadOwnedWorkDay()` (single owner-scoped work-day lookup, reused by both call sites).
+  - Added `assertExistingEntryUnlocked()`: for an existing `work_time_entries` row it resolves `existing.work_day_uuid`, rejects `WORK_DAY_LOCKED` if that stored parent is approved/admin-corrected, and rejects `WORK_DAY_REPARENT_NOT_SUPPORTED` if the incoming record points at a different parent. The stored relationship is now authoritative; the incoming relation is still validated separately in `assertOwnedRelations` (which is what covers newly created entries).
+- Added 4 focused regression tests (12 total in `tests/sync-domain-invariant.test.js`): omitted-parent, reparent-out-of-locked-day, reparent-between-two-open-days (isolating the new error code), and a positive test proving a legitimate entry under an open work day can still be updated. The three negative tests were each confirmed to fail against `05f356a` and pass after the fix.
+- TD-004 was **not** fully closed at `05f356a`; it is claimed closed only as of this checkpoint, now that the regression is covered.
+
+## Previous tours/stops checkpoint
+
+- Date: 2026-09-06.
+- Branch: `claude/sync-domain-invariant-audit`.
 - Objective: resolve the two TD-004 items left open by the previous checkpoint (`tours.tour_status`/`is_closed`, `stops.stop_status`/`is_completed`) by tracing actual current Android source, not by inferring compatibility risk from documentation.
 
 ## What changed in this checkpoint

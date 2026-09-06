@@ -149,6 +149,18 @@ async function relationOwned(client, sql, params) {
     return Boolean(result.rows[0]);
 }
 
+async function loadOwnedWorkDay(client, workDayUuid, auth) {
+    const result = await client.query(
+        `SELECT approval_status, admin_note, anomaly_flags FROM work_days
+         WHERE uuid::text = $4
+           AND deleted_at IS NULL
+           AND ${ownerScopeWhere(SYNC_TABLES.work_days, 0)}
+         LIMIT 1`,
+        [...driverScopeParams(auth), String(workDayUuid)]
+    );
+    return result.rows[0];
+}
+
 async function assertOwnedRelations(client, config, record, auth) {
     const params = driverScopeParams(auth);
     const tourId = recordValue(record, 'tour_id');
@@ -197,19 +209,31 @@ async function assertOwnedRelations(client, config, record, auth) {
 
     const workDayUuid = recordValue(record, 'work_day_uuid');
     if (workDayUuid && config.entity === 'work_time_entries') {
-        const dayResult = await client.query(
-            `SELECT approval_status, admin_note, anomaly_flags FROM work_days
-             WHERE uuid::text = $4
-               AND deleted_at IS NULL
-               AND ${ownerScopeWhere(SYNC_TABLES.work_days, 0)}
-             LIMIT 1`,
-            [...params, String(workDayUuid)]
-        );
-        const day = dayResult.rows[0];
+        const day = await loadOwnedWorkDay(client, workDayUuid, auth);
         if (!day) return rejectScope('WORK_DAY_SCOPE_DENIED', recordValue(record, 'uuid'));
         if (isWorkDayLocked(day)) return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid: recordValue(record, 'uuid') };
     }
 
+    return null;
+}
+
+// For an existing entry the STORED parent decides whether it may be edited, mirroring the
+// dedicated correction route, which guards on `entry.work_day_uuid` rather than on anything
+// the client sends. Without this an approved day's entries stay writable by simply omitting
+// work_day_uuid, or by pointing the record at some other open day.
+async function assertExistingEntryUnlocked(client, existing, record, auth) {
+    const storedParent = existing.work_day_uuid;
+    const uuid = existing.uuid ? String(existing.uuid) : null;
+    if (!storedParent) return null;
+
+    const day = await loadOwnedWorkDay(client, storedParent, auth);
+    if (!day) return rejectScope('WORK_DAY_SCOPE_DENIED', uuid);
+    if (isWorkDayLocked(day)) return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid };
+
+    const incomingParent = recordValue(record, 'work_day_uuid');
+    if (incomingParent && String(incomingParent) !== String(storedParent)) {
+        return { status: 'rejected', error: 'WORK_DAY_REPARENT_NOT_SUPPORTED', uuid };
+    }
     return null;
 }
 
@@ -286,6 +310,11 @@ async function applyChange(client, req, config, rawRecord, startedAt) {
 
     if (existing && config.entity === 'work_days' && isWorkDayLocked(existing)) {
         return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid: String(keyValue) };
+    }
+
+    if (existing && config.entity === 'work_time_entries') {
+        const lockError = await assertExistingEntryUnlocked(client, existing, { ...rawRecord, ...record }, req.deviceAuth);
+        if (lockError) return lockError;
     }
 
     const relationError = await assertOwnedRelations(client, config, { ...rawRecord, ...record }, req.deviceAuth);
