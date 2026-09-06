@@ -17,6 +17,7 @@ const PICKUP_STOP_UUID = '44444444-4444-4444-8444-444444444444';
 const OTHER_STOP_UUID = '66666666-6666-4666-8666-666666666666';
 const CARGO_UUID = '55555555-5555-4555-8555-555555555555';
 const FOREIGN_CARGO_UUID = '77777777-7777-4777-8777-777777777777';
+const SECOND_CARGO_UUID = '99999999-9999-4999-8999-999999999999';
 const TOUR_ID = 10;
 const FOREIGN_TOUR_ID = 99;
 const PICKUP_STOP_ID = 20;
@@ -79,7 +80,9 @@ function createApp({ cargo = [] } = {}) {
             deleted_at: null,
             updated_at: 100,
             ...item
-        }))
+        })),
+        cargoEvents: [],
+        cargoWrites: []
     };
 
     async function clientQuery(sql, params = []) {
@@ -123,10 +126,16 @@ function createApp({ cargo = [] } = {}) {
             return { rows, rowCount: rows.length };
         }
 
-        // Stored-cargo read used by the fix to establish authoritative current state.
+        // Stored-cargo read used by the fix to establish authoritative current state. The
+        // deleted_at filter is applied only when the statement actually asks for it, so this
+        // models the real database rather than silently enforcing the invariant for the code.
         if (sql.startsWith('SELECT') && sql.includes('FROM cargo') && sql.includes('uuid') && sql.includes('ANY')) {
-            const wanted = params[1] || [];
-            const rows = db.cargo.filter(c => c.tour_id === params[0] && wanted.map(String).includes(String(c.uuid))).map(c => ({ ...c }));
+            const wanted = (params[1] || []).map(String);
+            const excludesDeleted = sql.includes('deleted_at IS NULL');
+            const rows = db.cargo
+                .filter(c => c.tour_id === params[0] && wanted.includes(String(c.uuid))
+                    && (!excludesDeleted || c.deleted_at === null))
+                .map(c => ({ ...c }));
             return { rows, rowCount: rows.length };
         }
 
@@ -142,8 +151,11 @@ function createApp({ cargo = [] } = {}) {
 
         // Narrow mobile transition update (status + conditions only), scoped to this tour.
         if (sql.startsWith('UPDATE cargo SET')) {
-            const [status, , , updatedAt, uuid, tourId] = params;
-            const target = db.cargo.find(c => String(c.uuid) === String(uuid) && c.tour_id === tourId);
+            const [status, conditionAtPickup, conditionAtDelivery, updatedAt, uuid, tourId] = params;
+            db.cargoWrites.push({ status, conditionAtPickup, conditionAtDelivery, uuid });
+            const excludesDeleted = sql.includes('deleted_at IS NULL');
+            const target = db.cargo.find(c => String(c.uuid) === String(uuid) && c.tour_id === tourId
+                && (!excludesDeleted || c.deleted_at === null));
             if (target) {
                 target.status = status;
                 target.updated_at = updatedAt;
@@ -151,7 +163,10 @@ function createApp({ cargo = [] } = {}) {
             return { rows: [], rowCount: target ? 1 : 0 };
         }
 
-        if (sql.includes('INSERT INTO cargo_events')) return { rows: [], rowCount: 1 };
+        if (sql.includes('INSERT INTO cargo_events')) {
+            db.cargoEvents.push({ cargoId: params[0], eventType: params[1], fromStatus: params[2], toStatus: params[3], actorType: params[4] });
+            return { rows: [], rowCount: 1 };
+        }
 
         if (sql.includes('INSERT INTO cargo')) {
             const [uuid, tourId, pickupStopId, deliveryStopId] = params;
@@ -346,6 +361,72 @@ test('legitimate offline delivery is accepted and then unblocks the stop', async
     assert.equal(cargo.status, 'DELIVERED', 'IN_TRANSIT -> DELIVERED is a legal driver transition');
     const stop = db.stops.find(s => s.uuid === PICKUP_STOP_UUID);
     assert.equal(stop.is_completed, true, 'the stop must complete once its delivery is genuinely done');
+});
+
+test('one satisfied cargo does not unblock a stop while another is still pending', async () => {
+    const { app, db } = createApp({ cargo: [blockingPickupCargo] });
+    db.cargo.push({
+        id: 2, uuid: SECOND_CARGO_UUID, tour_id: TOUR_ID, name: 'Second', serial_number: 'SN-2',
+        pickup_stop_id: PICKUP_STOP_ID, delivery_stop_id: null, status: 'READY_FOR_PICKUP',
+        deleted_at: null, updated_at: 100
+    });
+    const res = await request(app, {
+        body: payload({
+            completePickupStop: true,
+            // Only the first item is genuinely picked up; the second stays pending.
+            cargo: [{ uuid: CARGO_UUID, name: 'Machine', status: 'PICKED_UP', updated_at: 300 }]
+        })
+    });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(db.cargo.find(c => c.uuid === CARGO_UUID).status, 'PICKED_UP');
+    assert.equal(db.cargo.find(c => c.uuid === SECOND_CARGO_UUID).status, 'READY_FOR_PICKUP');
+    const stop = db.stops.find(s => s.uuid === PICKUP_STOP_UUID);
+    assert.equal(stop.is_completed, false, 'a single remaining blocker must keep the stop blocked');
+});
+
+test('re-sending an already-applied transition is idempotent and writes no second event', async () => {
+    const { app, db } = createApp({ cargo: [{ pickup_stop_id: PICKUP_STOP_ID, status: 'PICKED_UP', updated_at: 300 }] });
+    const body = payload({ cargo: [{ uuid: CARGO_UUID, name: 'Machine', status: 'PICKED_UP', updated_at: 300 }] });
+    await request(app, { body });
+    await request(app, { body });
+    assert.equal(db.cargo.find(c => c.uuid === CARGO_UUID).status, 'PICKED_UP');
+    assert.equal(db.cargoEvents.length, 0, 'repeating known state must not manufacture lifecycle events');
+});
+
+test('a soft-deleted cargo row cannot be transitioned through mobile sync', async () => {
+    const { app, db } = createApp({ cargo: [{ pickup_stop_id: PICKUP_STOP_ID, status: 'READY_FOR_PICKUP', deleted_at: 999 }] });
+    const res = await request(app, {
+        body: payload({ cargo: [{ uuid: CARGO_UUID, name: 'Machine', status: 'PICKED_UP', updated_at: 300 }] })
+    });
+    assert.equal(res.status, 200, res.text);
+    const cargo = db.cargo.find(c => c.uuid === CARGO_UUID);
+    assert.equal(cargo.status, 'READY_FOR_PICKUP', 'deleted cargo is out of scope for the driver lifecycle');
+    assert.equal(db.cargoEvents.length, 0, 'no audit event for a refused transition');
+});
+
+test('condition fields are only accepted on the transition they belong to', async () => {
+    const { app, db } = createApp({ cargo: [blockingPickupCargo] });
+    await request(app, {
+        body: payload({
+            // A pickup must not be able to write the delivery condition.
+            cargo: [{ uuid: CARGO_UUID, name: 'Machine', status: 'PICKED_UP', conditionAtPickup: 'ok', conditionAtDelivery: 'forged', updated_at: 300 }]
+        })
+    });
+    const write = db.cargoWrites.at(-1);
+    assert.equal(write.conditionAtPickup, 'ok', 'the pickup condition belongs to a pickup');
+    assert.equal(write.conditionAtDelivery, null, 'the delivery condition must not ride along on a pickup');
+});
+
+test('an accepted transition writes exactly one audit event with driver attribution', async () => {
+    const { app, db } = createApp({ cargo: [blockingPickupCargo] });
+    await request(app, {
+        body: payload({ cargo: [{ uuid: CARGO_UUID, name: 'Machine', status: 'DAMAGED', updated_at: 300 }] })
+    });
+    assert.equal(db.cargoEvents.length, 1);
+    assert.equal(db.cargoEvents[0].eventType, 'DAMAGED_REPORTED', 'audit vocabulary must match the dedicated route');
+    assert.equal(db.cargoEvents[0].fromStatus, 'READY_FOR_PICKUP');
+    assert.equal(db.cargoEvents[0].toStatus, 'DAMAGED');
+    assert.equal(db.cargoEvents[0].actorType, 'DRIVER');
 });
 
 test('legitimate offline damage report is accepted', async () => {

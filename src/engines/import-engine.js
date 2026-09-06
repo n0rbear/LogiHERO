@@ -196,19 +196,25 @@ function isCompletedState(status, isCompleted) {
     return Boolean(isCompleted) || ['COMPLETED', 'SKIPPED'].includes(status);
 }
 
-// Only cargo already on this tour is addressable from a mobile payload, so a payload cannot
-// reach a row belonging to another tour, driver or company by naming its UUID.
+// Only live cargo already on this tour is addressable from a mobile payload, so a payload
+// cannot reach a row belonging to another tour by naming its UUID, and cannot act on a
+// deleted row — the dedicated transition route likewise resolves cargo with deleted_at IS NULL.
 async function loadTourCargo(client, tourId, cargoItems) {
     const uuids = cargoItems.map(item => item?.uuid).filter(Boolean).map(String);
     const stored = new Map();
     if (uuids.length === 0) return stored;
     const res = await client.query(
-        `SELECT id, uuid, status, updated_at FROM cargo WHERE tour_id = $1 AND uuid::text = ANY($2::text[])`,
+        `SELECT id, uuid, status, updated_at FROM cargo
+         WHERE tour_id = $1 AND deleted_at IS NULL AND uuid::text = ANY($2::text[])`,
         [tourId, uuids]
     );
     for (const row of res.rows) stored.set(String(row.uuid), row);
     return stored;
 }
+
+// The dedicated routes record a report as DAMAGED_REPORTED / MISSING_REPORTED rather than as
+// the bare status, so an offline transition lands in the audit log under the same name.
+const CARGO_EVENT_TYPES = { DAMAGED: 'DAMAGED_REPORTED', MISSING: 'MISSING_REPORTED' };
 
 // Applies the one thing a driver may legitimately change offline: the cargo's own lifecycle
 // status, and only along a transition the dedicated driver endpoints would also allow. An
@@ -240,28 +246,31 @@ async function applyMobileCargoTransition(client, tourId, storedCargo, item) {
         return;
     }
 
+    // Each condition belongs to one transition, exactly as the dedicated route records it, so
+    // neither becomes a field a client can set at will by attaching it to any transition.
+    const conditionAtPickup = requested === 'PICKED_UP'
+        ? (item.condition_at_pickup ?? item.conditionAtPickup ?? null)
+        : null;
+    const conditionAtDelivery = requested === 'DELIVERED'
+        ? (item.condition_at_delivery ?? item.conditionAtDelivery ?? null)
+        : null;
+
     await client.query(
         `UPDATE cargo SET status = $1,
             condition_at_pickup = COALESCE($2, condition_at_pickup),
             condition_at_delivery = COALESCE($3, condition_at_delivery),
             updated_at = $4, sync_state = 'SYNCED', revision = COALESCE(revision, 1) + 1
-         WHERE uuid::text = $5 AND tour_id = $6`,
-        [
-            requested,
-            item.condition_at_pickup ?? item.conditionAtPickup ?? null,
-            item.condition_at_delivery ?? item.conditionAtDelivery ?? null,
-            incomingUpdatedAt || Date.now(),
-            uuid,
-            tourId
-        ]
+         WHERE uuid::text = $5 AND tour_id = $6 AND deleted_at IS NULL`,
+        [requested, conditionAtPickup, conditionAtDelivery, incomingUpdatedAt || Date.now(), uuid, tourId]
     );
 
     // The dedicated endpoints always leave an audit row; an offline transition arriving late
-    // through bulk sync should not be less traceable than the same action taken online.
+    // through bulk sync should not be less traceable than the same action taken online. The
+    // timestamp is the server's, so a client cannot backdate its own audit trail.
     await client.query(
         `INSERT INTO cargo_events (cargo_id, event_type, from_status, to_status, actor_type, timestamp, reason)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [stored.id, requested, stored.status, requested, 'DRIVER', Date.now(), 'Offline sync']
+        [stored.id, CARGO_EVENT_TYPES[requested] || requested, stored.status, requested, 'DRIVER', Date.now(), 'Offline sync']
     );
 }
 

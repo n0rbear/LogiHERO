@@ -68,6 +68,16 @@ Recent production verification showed `/version` had the deployed commit, while 
 
 Some integration checks may skip when local PostgreSQL is unavailable. Never count those skips as database PASS.
 
+### TD-010 - Legacy tour sync resolves the tour by client-supplied UUID without owner scope
+
+Found during the final pre-merge review of PR #5 (2026-09-06) and **reproduced against real PostgreSQL**. `ImportEngine.processTour` resolves the tour with `SELECT id, updated_at FROM tours WHERE uuid = $1` and no driver/company scope. The route only checks that the path `driverName` matches the authenticated driver; the tour named in the body is never checked against that driver. A driver who knows another driver's tour UUID can therefore have their payload applied against that tour: in the probe, Driver A transitioned Driver B's cargo from `READY_FOR_PICKUP` to `PICKED_UP`. Note the tour's own `driver_name` was not taken over, and the sibling delete path in `sync-tour.routes.js` does scope correctly with `AND driver_name = $3` — it is specifically the `processTour` lookup that is unscoped.
+
+This is **pre-existing and not introduced by PR #5**: the lookup line is untouched by that PR, and before it the mobile path was a full cargo upsert, so PR #5 strictly narrows what a caller can do to a foreign tour (now only a legal driver transition, with creation/deletion/re-pointing refused). It is recorded separately rather than widened into PR #5's scope.
+
+Exploitability: requires knowing a v4 tour UUID, which is not enumerable, so this is an IDOR-style gap rather than a broadly reachable one. Stops in the payload are also applied against the foreign tour.
+
+Next evidence needed: scope the `processTour` tour lookup to the authenticated driver/company (or reject a tour whose `driver_name` differs), plus a focused cross-driver regression test on `POST /api/sync-tours/:driverName`. Do this in its own change, not folded into cargo work.
+
 ## Medium
 
 ### TD-008 - Historical documentation conflicts with current code
@@ -92,4 +102,6 @@ Composition attack (found by adversarial review of the first TD-009 fix, 2026-09
 
 Fixed in the same branch by giving the server authority over cargo: mobile payload items are no longer upserted. Only cargo already on the synced tour is addressable (`loadTourCargo`), and the only client-writable change is the cargo's own status, accepted only along a transition the dedicated driver endpoints would also allow (`isLegalDriverTransition`, backed by `DRIVER_TRANSITIONS` in `src/engines/cargo-lifecycle.js`, which `cargo.routes.js` now also uses so there is one definition). Stop links, tour, identifiers, `deleted_at` and row creation are dispatcher-owned and ignored from mobile. Accepted offline transitions write a `cargo_events` audit row, so an offline action is no less traceable than the same action taken online. Refused transitions are logged and reported to NDP as `cargo_transition_refused`.
 
-Remaining evidence: `tests/legacy-tour-sync-cargo-blocking.test.js` (6) covers the original bypass variants; `tests/legacy-tour-sync-cargo-authority.test.js` (11) covers attacks A–F, cross-tour hijack, creation, and the three legitimate offline transitions; `tests/legacy-tour-sync-cargo.integration.test.js` (real PostgreSQL) covers the composition attack, the legitimate offline pickup, and the audit row. Every negative case was confirmed to fail before its fix. Not yet verified against production data.
+A final independent review before merge added three parity corrections where the sync path still differed from the authoritative dedicated route: a soft-deleted cargo row could receive a transition (the dedicated route resolves cargo with `deleted_at IS NULL`), the condition fields could ride along on the wrong transition, and the audit row used the bare status instead of the dedicated route's `DAMAGED_REPORTED`/`MISSING_REPORTED` vocabulary. Each was confirmed failing before the correction.
+
+Remaining evidence: `tests/legacy-tour-sync-cargo-blocking.test.js` (6) covers the original bypass variants; `tests/legacy-tour-sync-cargo-authority.test.js` (16) covers attacks A–F, cross-tour hijack, creation, deleted-row transitions, condition-field authority, audit-event shape, multi-cargo blocking, idempotent replay, and the legitimate offline transitions; `tests/legacy-tour-sync-cargo.integration.test.js` (real PostgreSQL, 4) covers the composition attack, the legitimate offline pickup, the deleted-row refusal, and the audit row. Every negative case was confirmed to fail before its fix. **No production smoke was performed and none of this is verified against production data.**

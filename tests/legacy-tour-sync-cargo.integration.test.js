@@ -90,6 +90,25 @@ test('TD-009 cargo authority against real PostgreSQL', async (t) => {
         }
     });
 
+    await t.test('a soft-deleted cargo row cannot be transitioned', async () => {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const fixture = await seed(client);
+            await client.query('UPDATE cargo SET deleted_at = 999 WHERE id = $1', [fixture.cargo.id]);
+            const body = payload(fixture, 'PICKED_UP');
+            await ImportEngine.processTour(client, DRIVER, body.tour, body.stops, { source: 'mobile', cargo: body.cargo });
+
+            const cargo = await client.query('SELECT status FROM cargo WHERE id = $1', [fixture.cargo.id]);
+            assert.strictEqual(cargo.rows[0].status, 'READY_FOR_PICKUP', 'deleted cargo is out of lifecycle scope');
+            const events = await client.query('SELECT 1 FROM cargo_events WHERE cargo_id = $1', [fixture.cargo.id]);
+            assert.strictEqual(events.rowCount, 0, 'no audit row for a refused transition');
+        } finally {
+            await client.query('ROLLBACK');
+            client.release();
+        }
+    });
+
     await t.test('accepted offline transition leaves an audit row', async () => {
         const client = await pool.connect();
         try {
