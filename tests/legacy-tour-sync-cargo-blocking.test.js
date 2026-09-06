@@ -119,13 +119,37 @@ function createApp({ cargo = [] } = {}) {
             return { rows: db.stops.map(s => ({ uuid: s.uuid, id: s.id })), rowCount: db.stops.length };
         }
 
+        // Stored-cargo read backing the mobile transition authority check.
+        if (sql.startsWith('SELECT') && sql.includes('FROM cargo') && sql.includes('ANY')) {
+            const wanted = (params[1] || []).map(String);
+            const rows = db.cargo
+                .filter(c => c.tour_id === params[0] && wanted.includes(String(c.uuid)))
+                .map(c => ({ ...c }));
+            return { rows, rowCount: rows.length };
+        }
+
         // Authoritative cargo-blocking read (present only once the fix exists).
         if (sql.includes('FROM cargo') && sql.includes('pickup_stop_id') && sql.includes('tour_id = $1') && !sql.includes('INSERT')) {
             const stopId = params[1];
-            const rows = db.cargo.filter(c => c.tour_id === params[0] && c.deleted_at === null
-                && (stopId === undefined || c.pickup_stop_id === stopId || c.delivery_stop_id === stopId));
+            const rows = db.cargo
+                .filter(c => c.tour_id === params[0] && c.deleted_at === null
+                    && (stopId === undefined || c.pickup_stop_id === stopId || c.delivery_stop_id === stopId))
+                .map(c => ({ ...c }));
             return { rows, rowCount: rows.length };
         }
+
+        // Narrow mobile transition update (status only, scoped to this tour).
+        if (sql.startsWith('UPDATE cargo SET')) {
+            const [status, , , updatedAt, uuid, tourId] = params;
+            const target = db.cargo.find(c => String(c.uuid) === String(uuid) && c.tour_id === tourId);
+            if (target) {
+                target.status = status;
+                target.updated_at = updatedAt;
+            }
+            return { rows: [], rowCount: target ? 1 : 0 };
+        }
+
+        if (sql.includes('INSERT INTO cargo_events')) return { rows: [], rowCount: 1 };
 
         if (sql.includes('INSERT INTO cargo')) {
             const uuid = params[0];

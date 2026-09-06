@@ -11,7 +11,7 @@ const {
 } = require('../utils/mobile-scope');
 const ndp = require('../integrations/ndp-client');
 const TourCore = require('../engines/tour-core-engine');
-const { checkCargoBlocking } = require('../engines/cargo-blocking');
+const { checkCargoBlocking } = require('../engines/cargo-lifecycle');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
 
 function numberOrNull(value) {

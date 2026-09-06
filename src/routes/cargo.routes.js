@@ -3,6 +3,7 @@ const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
 const { requireAdminWrite } = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
+const { DRIVER_TRANSITIONS } = require('../engines/cargo-lifecycle');
 const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
 const {
     ensureCargoOwned,
@@ -404,19 +405,19 @@ async function transitionCargo(req, res, eventType, fromStatuses, toStatus) {
 }
 
 cargoRoutes.post('/api/cargo/:cargoId/pickup', requireDeviceAuth, async (req, res) => {
-    await transitionCargo(req, res, 'PICKED_UP', ['PLANNED', 'READY_FOR_PICKUP'], 'PICKED_UP');
+    await transitionCargo(req, res, 'PICKED_UP', DRIVER_TRANSITIONS.PICKED_UP, 'PICKED_UP');
 });
 
 cargoRoutes.post('/api/cargo/:cargoId/deliver', requireDeviceAuth, async (req, res) => {
-    await transitionCargo(req, res, 'DELIVERED', ['PICKED_UP', 'IN_TRANSIT'], 'DELIVERED');
+    await transitionCargo(req, res, 'DELIVERED', DRIVER_TRANSITIONS.DELIVERED, 'DELIVERED');
 });
 
 cargoRoutes.post('/api/cargo/:cargoId/report-damage', requireDeviceAuth, async (req, res) => {
-    await transitionCargo(req, res, 'DAMAGED_REPORTED', ['PICKED_UP', 'IN_TRANSIT', 'PLANNED', 'READY_FOR_PICKUP'], 'DAMAGED');
+    await transitionCargo(req, res, 'DAMAGED_REPORTED', DRIVER_TRANSITIONS.DAMAGED, 'DAMAGED');
 });
 
 cargoRoutes.post('/api/cargo/:cargoId/report-missing', requireDeviceAuth, async (req, res) => {
-    await transitionCargo(req, res, 'MISSING_REPORTED', ['PICKED_UP', 'IN_TRANSIT', 'PLANNED', 'READY_FOR_PICKUP'], 'MISSING');
+    await transitionCargo(req, res, 'MISSING_REPORTED', DRIVER_TRANSITIONS.MISSING, 'MISSING');
 });
 
 // Admin Resolution

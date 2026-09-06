@@ -1,5 +1,23 @@
-// Single source of truth for "does cargo block completion", shared by the dedicated
-// stop-complete endpoint and the legacy mobile bulk tour sync so the two cannot drift.
+// Single source of truth for the cargo rules more than one endpoint has to agree on: which
+// cargo blocks a stop from completing, and which status changes a driver may make. Shared by
+// the dedicated cargo/stop routes and the legacy mobile bulk tour sync so the two cannot drift.
+
+// The transitions the dedicated driver endpoints allow, keyed by target status. Mirrors the
+// pickup / deliver / report-damage / report-missing routes exactly. Statuses a driver may
+// never set directly (IN_TRANSIT, CANCELLED, REJECTED, anything unknown) are unreachable
+// because they are not keys here.
+const DRIVER_TRANSITIONS = {
+    PICKED_UP: ['PLANNED', 'READY_FOR_PICKUP'],
+    DELIVERED: ['PICKED_UP', 'IN_TRANSIT'],
+    DAMAGED: ['PICKED_UP', 'IN_TRANSIT', 'PLANNED', 'READY_FOR_PICKUP'],
+    MISSING: ['PICKED_UP', 'IN_TRANSIT', 'PLANNED', 'READY_FOR_PICKUP']
+};
+
+function isLegalDriverTransition(fromStatus, toStatus) {
+    if (!toStatus || toStatus === fromStatus) return true;
+    return (DRIVER_TRANSITIONS[toStatus] || []).includes(fromStatus);
+}
+
 async function checkCargoBlocking(client, tourId, stopId = null) {
     const query = stopId
         ? `SELECT id, name, serial_number, status, pickup_stop_id, delivery_stop_id
@@ -27,4 +45,4 @@ async function checkCargoBlocking(client, tourId, stopId = null) {
     return blocking;
 }
 
-module.exports = { checkCargoBlocking };
+module.exports = { checkCargoBlocking, DRIVER_TRANSITIONS, isLegalDriverTransition };
