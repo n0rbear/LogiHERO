@@ -1,10 +1,11 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 
 const adminTransferTourRoutes = express.Router();
 
-adminTransferTourRoutes.post('/admin/transfer-tour', requireAdmin, async (req, res) => {
+adminTransferTourRoutes.post('/admin/transfer-tour', requireAdmin, requireAdminWrite, async (req, res) => {
     const { tourId, newDriverName } = req.body;
     const client = await pool.connect();
     try {

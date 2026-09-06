@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const { IS_DEPLOYED } = require('../config/env');
 
 const devSeedRoutes = express.Router();
@@ -12,7 +13,7 @@ const blockDeployedDevDataChange = (req, res, next) => {
     return next();
 };
 
-devSeedRoutes.post('/admin/dev-seed-demo', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
+devSeedRoutes.post('/admin/dev-seed-demo', requireAdmin, requireAdminWrite, blockDeployedDevDataChange, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -113,7 +114,7 @@ devSeedRoutes.post('/admin/dev-seed-demo', requireAdmin, blockDeployedDevDataCha
     }
 });
 
-devSeedRoutes.post('/admin/dev-mint-tour', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
+devSeedRoutes.post('/admin/dev-mint-tour', requireAdmin, requireAdminWrite, blockDeployedDevDataChange, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -167,4 +168,3 @@ devSeedRoutes.post('/admin/dev-mint-tour', requireAdmin, blockDeployedDevDataCha
 });
 
 module.exports = devSeedRoutes;
-

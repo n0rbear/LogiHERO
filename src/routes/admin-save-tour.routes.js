@@ -1,11 +1,12 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 
 const createAdminSaveTourRoutes = ({ ImportEngine }) => {
     const adminSaveTourRoutes = express.Router();
 
-    adminSaveTourRoutes.post('/admin/save-tour', requireAdmin, async (req, res) => {
+    adminSaveTourRoutes.post('/admin/save-tour', requireAdmin, requireAdminWrite, async (req, res) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');

@@ -2,9 +2,19 @@
 
 ## Current checkpoint
 
-- Date: 2026-08-09.
-- Branch: `codex/mobile-public-auth-audit`.
-- Objective: complete the product/security design review for the remaining by-name driver dashboard telemetry surface and implement the safest compatible access model.
+- Date: 2026-09-06.
+- Branch: `codex/admin-write-authorization-closure`.
+- Objective: close every remaining READ_ONLY authorization gap on unsafe routes authenticated with `requireAdmin`.
+
+## What changed in this checkpoint
+
+- Added `requireAdminWrite` to legacy admin cost creation/status writes and tour save/delete/transfer writes.
+- Added `requireAdminWrite` to development seed/reset writes in addition to their existing deployed-environment block.
+- Session logout remains the only intentional unsafe `requireAdmin` route without `requireAdminWrite`; it destroys only the caller's own admin session.
+- Added focused route-level coverage proving all nine corrected routes accept a FULL_ADMIN cookie session with valid CSRF, reject READ_ONLY bearer credentials with `403` before database/import handlers, and reject cookie sessions without CSRF before mutation.
+- Added a source inventory regression that fails if a future POST/PUT/PATCH/DELETE route uses `requireAdmin` without `requireAdminWrite`, except logout.
+
+## Previous dashboard telemetry checkpoint
 
 ## What changed in this checkpoint
 

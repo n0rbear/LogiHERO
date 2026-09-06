@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const { IS_DEPLOYED } = require('../config/env');
 
 const devResetRoutes = express.Router();
@@ -12,7 +13,7 @@ const blockDeployedDevDataChange = (req, res, next) => {
     return next();
 };
 
-devResetRoutes.post('/admin/dev-reset-database', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
+devResetRoutes.post('/admin/dev-reset-database', requireAdmin, requireAdminWrite, blockDeployedDevDataChange, async (req, res) => {
     if (req.body?.confirm !== 'RESET_DEV_DATABASE') {
         return res.status(400).json({ error: 'Missing confirm: RESET_DEV_DATABASE' });
     }
@@ -45,7 +46,7 @@ devResetRoutes.post('/admin/dev-reset-database', requireAdmin, blockDeployedDevD
     }
 });
 
-devResetRoutes.post('/admin/dev-reset-demo', requireAdmin, blockDeployedDevDataChange, async (req, res) => {
+devResetRoutes.post('/admin/dev-reset-demo', requireAdmin, requireAdminWrite, blockDeployedDevDataChange, async (req, res) => {
     if (req.body?.confirm !== 'RESET_DEMO_DATA') {
         return res.status(400).json({ error: 'Missing confirm: RESET_DEMO_DATA' });
     }
