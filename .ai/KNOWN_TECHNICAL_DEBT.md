@@ -1,6 +1,8 @@
 # Known technical debt
 
-Severity reflects current repository evidence as of 2026-08-09.
+Severity reflects current repository evidence as of 2026-09-06.
+
+The 2026-09-06 admin write authorization audit found and closed the remaining READ_ONLY bearer gaps on legacy cost/tour and development seed/reset routes. All unsafe `requireAdmin` route declarations now also require `requireAdminWrite`, with session logout as the sole intentional non-business-data exception.
 
 ## Critical
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 const ndp = require('../integrations/ndp-client');
 const { requireDeviceAuth } = require('../middleware/requireDeviceAuth');
 const { ensureExistingUuidOwned, requireOwnDriverName } = require('../utils/mobile-scope');
@@ -139,7 +140,7 @@ costManagementRoutes.get('/api/cost-status/:driverName', requireDeviceAuth, asyn
     }
 });
 
-costManagementRoutes.post('/admin/update-cost-status', requireAdmin, async (req, res) => {
+costManagementRoutes.post('/admin/update-cost-status', requireAdmin, requireAdminWrite, async (req, res) => {
     const { uuid, id, status } = req.body;
     const allowed = new Set(['Rogzitve', 'Bekuldve', 'Elfogadva', 'Kifizetve', 'Rögzítve', 'Beküldve']);
     if (!status || (!uuid && !id)) return res.sendStatus(400);
@@ -157,7 +158,7 @@ costManagementRoutes.post('/admin/update-cost-status', requireAdmin, async (req,
     }
 });
 
-costManagementRoutes.post('/admin/save-cost', requireAdmin, async (req, res) => {
+costManagementRoutes.post('/admin/save-cost', requireAdmin, requireAdminWrite, async (req, res) => {
     const { driverName, amount, currency, category, notes, mileage, timestamp } = req.body;
     const parsedAmount = Number(amount);
     const parsedMileage = mileage === '' || mileage === null || mileage === undefined ? null : Number(mileage);

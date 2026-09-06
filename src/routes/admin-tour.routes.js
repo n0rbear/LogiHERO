@@ -1,10 +1,11 @@
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
+const { requireAdminWrite } = require('../middleware/requireAdmin');
 
 const adminTourRoutes = express.Router();
 
-adminTourRoutes.post('/admin/delete-tour', requireAdmin, async (req, res) => {
+adminTourRoutes.post('/admin/delete-tour', requireAdmin, requireAdminWrite, async (req, res) => {
     const id = req.body.id;
     if (!id) return res.status(400).send('Missing tour id');
     try {

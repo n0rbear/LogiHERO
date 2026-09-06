@@ -18,6 +18,7 @@ Current source must be inspected before relying on any claim below.
 - `/driver/:name` is an authenticated admin/internal dashboard, not a public share URL.
 - `/api/live-status/:name`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` allow admin/session access or authenticated device access only for the server-derived owning driver.
 - `/api/fleet-status` and `/api/all-drivers` are admin-only; ordinary driver devices cannot read fleet-wide or driver-selector data.
+- Every unsafe route authenticated with `requireAdmin` also requires `requireAdminWrite`, except session logout. This includes legacy cost/tour writes and development seed/reset routes, so READ_ONLY bearer credentials are rejected before database or import handlers run.
 
 ## Known high-risk gaps from current source
 
