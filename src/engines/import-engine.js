@@ -1,4 +1,5 @@
 const AddressEngine = require('./address-engine');
+const { checkCargoBlocking, isLegalDriverTransition } = require('./cargo-lifecycle');
 
 const ImportEngine = {
     async processTour(client, driverName, tourData, stopsData, options = {}) {
@@ -54,6 +55,15 @@ const ImportEngine = {
 
         if (deletedStopUuids.length > 0 && !isMobileSync) {
             await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid::text = ANY($3::text[]) AND (updated_at IS NULL OR updated_at <= $1)', [tour.updated_at, tourId, deletedStopUuids]);
+        }
+
+        // Captured before the upsert so a completion can be told apart from a stop the server
+        // already had completed: Android re-sends every tour on each sync cycle, and re-sending
+        // an already-completed stop must never start failing because of later cargo changes.
+        const priorStopState = new Map();
+        if (isMobileSync && tourId) {
+            const priorRes = await client.query('SELECT uuid, is_completed, stop_status FROM stops WHERE tour_id = $1', [tourId]);
+            for (const row of priorRes.rows) priorStopState.set(String(row.uuid), row);
         }
 
         const currentUuids = [];
@@ -124,7 +134,17 @@ const ImportEngine = {
                 return map;
             }, {});
 
+            // A mobile payload may only carry driver lifecycle transitions for cargo the
+            // dispatcher already placed on this tour. Everything else about a cargo row — its
+            // existence, tour, stop links, identifiers and deletion — is dispatcher-owned, so
+            // mobile items go through a narrow update rather than the full upsert below.
+            const storedCargo = isMobileSync ? await loadTourCargo(client, tourId, cargoItems) : null;
+
             for (const c of cargoItems) {
+                if (isMobileSync) {
+                    await applyMobileCargoTransition(client, tourId, storedCargo, c);
+                    continue;
+                }
                 const pickupStopId = c.pickup_stop_id || stopUuidToIdMap[c.pickup_stop_uuid];
                 const deliveryStopId = c.delivery_stop_id || stopUuidToIdMap[c.delivery_stop_uuid];
                 const now = Date.now();
@@ -164,8 +184,142 @@ const ImportEngine = {
             }
         }
 
+        if (isMobileSync && tourId) {
+            await refuseCargoBlockedCompletions(client, tourId, groupedStops, priorStopState);
+        }
+
         return tourId;
     }
 };
+
+function isCompletedState(status, isCompleted) {
+    return Boolean(isCompleted) || ['COMPLETED', 'SKIPPED'].includes(status);
+}
+
+// Only live cargo already on this tour is addressable from a mobile payload, so a payload
+// cannot reach a row belonging to another tour by naming its UUID, and cannot act on a
+// deleted row — the dedicated transition route likewise resolves cargo with deleted_at IS NULL.
+async function loadTourCargo(client, tourId, cargoItems) {
+    const uuids = cargoItems.map(item => item?.uuid).filter(Boolean).map(String);
+    const stored = new Map();
+    if (uuids.length === 0) return stored;
+    const res = await client.query(
+        `SELECT id, uuid, status, updated_at FROM cargo
+         WHERE tour_id = $1 AND deleted_at IS NULL AND uuid::text = ANY($2::text[])`,
+        [tourId, uuids]
+    );
+    for (const row of res.rows) stored.set(String(row.uuid), row);
+    return stored;
+}
+
+// The dedicated routes record a report as DAMAGED_REPORTED / MISSING_REPORTED rather than as
+// the bare status, so an offline transition lands in the audit log under the same name.
+const CARGO_EVENT_TYPES = { DAMAGED: 'DAMAGED_REPORTED', MISSING: 'MISSING_REPORTED' };
+
+// Applies the one thing a driver may legitimately change offline: the cargo's own lifecycle
+// status, and only along a transition the dedicated driver endpoints would also allow. An
+// unknown row, a stale update, or an illegal leap leaves the stored state untouched, which is
+// what keeps the stop-completion check downstream reading trustworthy state.
+async function applyMobileCargoTransition(client, tourId, storedCargo, item) {
+    const uuid = item?.uuid ? String(item.uuid) : null;
+    if (!uuid) return;
+    const stored = storedCargo.get(uuid);
+    if (!stored) return;
+
+    const incomingUpdatedAt = Number(item.updated_at ?? item.updatedAt ?? 0);
+    const storedUpdatedAt = Number(stored.updated_at ?? 0);
+    if (stored.updated_at !== null && stored.updated_at !== undefined && incomingUpdatedAt < storedUpdatedAt) return;
+
+    const requested = item.status || null;
+    if (!requested || requested === stored.status) return;
+
+    if (!isLegalDriverTransition(stored.status, requested)) {
+        console.warn(`[CARGO] Refused mobile sync transition ${stored.status} -> ${requested} for cargo ${uuid}`);
+        const ndp = require('../integrations/ndp-client');
+        await ndp.trackEvent({
+            traceId: 'sync-' + Date.now(),
+            eventType: 'cargo_transition_refused',
+            title: 'Illegal cargo transition refused during mobile sync',
+            component: 'cargo',
+            payload: { tourId: String(tourId), cargoId: String(stored.id), from: String(stored.status), to: String(requested) }
+        });
+        return;
+    }
+
+    // Each condition belongs to one transition, exactly as the dedicated route records it, so
+    // neither becomes a field a client can set at will by attaching it to any transition.
+    const conditionAtPickup = requested === 'PICKED_UP'
+        ? (item.condition_at_pickup ?? item.conditionAtPickup ?? null)
+        : null;
+    const conditionAtDelivery = requested === 'DELIVERED'
+        ? (item.condition_at_delivery ?? item.conditionAtDelivery ?? null)
+        : null;
+
+    await client.query(
+        `UPDATE cargo SET status = $1,
+            condition_at_pickup = COALESCE($2, condition_at_pickup),
+            condition_at_delivery = COALESCE($3, condition_at_delivery),
+            updated_at = $4, sync_state = 'SYNCED', revision = COALESCE(revision, 1) + 1
+         WHERE uuid::text = $5 AND tour_id = $6 AND deleted_at IS NULL`,
+        [requested, conditionAtPickup, conditionAtDelivery, incomingUpdatedAt || Date.now(), uuid, tourId]
+    );
+
+    // The dedicated endpoints always leave an audit row; an offline transition arriving late
+    // through bulk sync should not be less traceable than the same action taken online. The
+    // timestamp is the server's, so a client cannot backdate its own audit trail.
+    await client.query(
+        `INSERT INTO cargo_events (cargo_id, event_type, from_status, to_status, actor_type, timestamp, reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [stored.id, CARGO_EVENT_TYPES[requested] || requested, stored.status, requested, 'DRIVER', Date.now(), 'Offline sync']
+    );
+}
+
+// The dedicated stop-complete endpoint refuses to close a stop while cargo pickup/delivery is
+// still outstanding. The legacy bulk sync applied the same completion without that check, so a
+// modified client or a direct API call could close the stop anyway. Cargo updates for this sync
+// land earlier in this same transaction, so the check runs last and reads the final state: a
+// driver who picked the cargo up and closed the stop offline still syncs both together.
+// A refused transition reverts only that stop, leaving the rest of the sync intact, which
+// matches how this route already refuses illegal transitions through its monotonic merge.
+async function refuseCargoBlockedCompletions(client, tourId, groupedStops, priorStopState) {
+    const candidates = [];
+    for (const s of groupedStops.values()) {
+        const main = s.items[0];
+        if (!main.uuid || !isCompletedState(main.stop_status, main.is_completed)) continue;
+        const prior = priorStopState.get(String(main.uuid));
+        if (prior && isCompletedState(prior.stop_status, prior.is_completed)) continue;
+        candidates.push({ uuid: String(main.uuid), prior });
+    }
+    if (candidates.length === 0) return;
+
+    const idRes = await client.query('SELECT uuid, id FROM stops WHERE tour_id = $1', [tourId]);
+    const idByUuid = new Map(idRes.rows.map(row => [String(row.uuid), row.id]));
+
+    for (const candidate of candidates) {
+        const stopId = idByUuid.get(candidate.uuid);
+        if (stopId === undefined || stopId === null) continue;
+        const blocking = await checkCargoBlocking(client, tourId, Number(stopId));
+        if (blocking.length === 0) continue;
+
+        await client.query(
+            'UPDATE stops SET stop_status = $1, is_completed = $2, updated_at = $3 WHERE uuid::text = $4',
+            [candidate.prior?.stop_status || 'PENDING', Boolean(candidate.prior?.is_completed), Date.now(), candidate.uuid]
+        );
+        console.warn(`[CARGO] Refused stop completion via mobile sync: tour=${tourId} stop=${stopId} blocking=${blocking.length}`);
+        const ndp = require('../integrations/ndp-client');
+        await ndp.trackEvent({
+            traceId: 'sync-' + Date.now(),
+            eventType: 'stop_completion_blocked_by_cargo',
+            title: 'Stop completion refused during mobile sync',
+            component: 'cargo',
+            payload: {
+                tourId: String(tourId),
+                stopId: String(stopId),
+                blockingCount: String(blocking.length),
+                requiredActions: blocking.map(item => item.requiredAction).join(',')
+            }
+        });
+    }
+}
 
 module.exports = ImportEngine;

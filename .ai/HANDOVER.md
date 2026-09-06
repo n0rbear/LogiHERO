@@ -3,6 +3,35 @@
 ## Current checkpoint
 
 - Date: 2026-09-06.
+- Branch: `claude/legacy-tour-sync-cargo-blocking` (branched from merged main `6a32d07`).
+- Objective: reproduce and close TD-009 — the legacy mobile bulk tour sync accepting a stop completion without re-checking pending cargo.
+
+## What changed in this checkpoint
+
+- Reproduced the bypass against merged main `6a32d07` before writing any fix, for both variants: a pending pickup (`READY_FOR_PICKUP`) and a pending delivery (`IN_TRANSIT`) at the stop. In both, `POST /api/sync-tours/:driverName` committed with the stop completed.
+- Confirmed the cargo-blocking rule from source: cargo blocks a stop when it is that stop's pickup and is `PLANNED`/`READY_FOR_PICKUP`, or that stop's delivery and is `PICKED_UP`/`IN_TRANSIT`. `DELIVERED`/`CANCELLED`/`REJECTED`/`DAMAGED`/`MISSING` do not block per-stop completion; soft-deleted cargo never blocks.
+- Extracted `checkCargoBlocking` verbatim from `tour-core.routes.js` into `src/engines/cargo-blocking.js`, now required by both the dedicated stop-complete endpoint and `ImportEngine`, so the two cannot drift into subtly different rules.
+- `ImportEngine.processTour` refuses cargo-blocked completions on mobile syncs. Two ordering facts shaped this:
+  - Cargo updates land *after* the stop upsert in the same transaction, so the check runs last and reads the post-sync state. A driver who picked cargo up and closed the stop offline still syncs both together.
+  - Android re-sends every tour each cycle, so only stops this payload actually transitions to completed are checked; an already-completed stop is left alone and cannot start failing later if cargo returns to a pending state.
+- A refused completion reverts just that stop inside the same transaction and lets the rest of the sync commit — the same philosophy as the route's existing monotonic merge — instead of failing the driver's whole tour sync. Logged and reported to NDP as `stop_completion_blocked_by_cargo`.
+- Added `tests/legacy-tour-sync-cargo-blocking.test.js` (6 tests): both bypass variants (each confirmed to fail against `6a32d07`), satisfied cargo, terminal cargo, the legitimate offline pickup+complete batch, and the already-completed re-send case.
+- Adversarial follow-up in the same branch: the "mobile payload can set cargo status directly" note above turned out to defeat the fix itself, because the blocking check reads cargo state *after* the payload's cargo rows are applied. Reproduced against branch head `d484501` — 7 of 11 adversarial cases failed, and the flagship case also failed against real PostgreSQL:
+  - forged `READY_FOR_PICKUP` → `DELIVERED` unlocked a pickup stop; forged `CANCELLED` unlocked a delivery stop;
+  - soft-deleting the blocking cargo, or re-pointing it at another stop, unlocked the stop;
+  - cargo could be created outright, and a cargo UUID belonging to **another tour** could be named in the payload and reassigned into the synced tour (`tour_id` was written from the payload with no ownership check);
+  - illegal lifecycle leaps were accepted even with no stop completion involved.
+- Android's real cargo authority, from source: `CargoViewModel` writes the new status to Room, then calls the dedicated endpoint inside a `try/catch` that only logs on failure, with no retry queue. Android never calls `addCargo`/`updateCargo`/`deleteCargo`. So bulk sync is the only path an offline pickup/delivery ever reaches the server, and status is the only field it legitimately carries — classification C for status, A for everything else.
+- Fix: mobile cargo items are no longer upserted. Only cargo already on the synced tour is addressable (`loadTourCargo`), only its status is client-writable, and only along a transition the dedicated driver endpoints allow (`isLegalDriverTransition` / `DRIVER_TRANSITIONS` in `src/engines/cargo-lifecycle.js`, which `cargo.routes.js` now uses too so there is one definition). Accepted transitions write a `cargo_events` audit row; refused ones are logged and sent to NDP as `cargo_transition_refused`. Ordering is unchanged and is what preserves the distinction: legal transitions land first, so a genuine offline pickup still unblocks its stop, while a forged one never changes stored state and the stop stays blocked.
+- `src/engines/cargo-blocking.js` was renamed to `src/engines/cargo-lifecycle.js` now that it owns both the blocking rule and the driver transition table.
+- Final independent review before merge found three remaining divergences from the dedicated route and corrected them: a soft-deleted cargo row could still be transitioned, the condition fields could ride along on the wrong transition, and the audit row used the bare status rather than `DAMAGED_REPORTED`/`MISSING_REPORTED`. Coverage was extended to multi-cargo blocking, idempotent replay, condition-field authority and audit-event shape, and the deleted-row invariant was given real-PostgreSQL evidence rather than mock-only.
+- That review also caught a vacuous test of its own making: the mock had enforced the `deleted_at` filter itself, so the test passed with or without the production fix. The mock now applies that filter only when the statement actually contains it, and the test was re-confirmed to fail before the fix.
+- Partial-acceptance semantics were reviewed and kept: a refused stop completion reverts only that stop inside the transaction while the rest of the sync commits. Android ignores the response body and pulls server state on the same cycle (`syncTours` pushes then calls `getTours` → `syncRemoteTours`), so divergence self-heals deterministically. A hard failure would instead block the driver's entire tour sync on one bad stop. The trade-off is that the response does not name which record was refused; the refusal is visible in logs and NDP only.
+- Open and deliberately not fixed here: `processTour` resolves the tour by client-supplied UUID without owner scope (TD-010) — pre-existing, reproduced against real PostgreSQL, narrowed by this work but not closed.
+
+## Previous TD-004 checkpoint (merged as main `6a32d07`, PR #4)
+
+- Date: 2026-09-06.
 - Branch: `claude/sync-domain-invariant-audit`.
 - Objective: verify a pre-merge review finding that the `work_time_entries` approved-work-day guard added earlier in this branch was itself bypassable, and close it before TD-004 may be claimed complete.
 

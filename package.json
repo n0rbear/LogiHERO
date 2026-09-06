@@ -20,7 +20,7 @@
     "release:gate:release": "node scripts/release-gate.js --release",
     "start": "node server.js",
     "test": "node scripts/run-node-suite.js",
-    "test:integration": "node --test tests/hotel.test.js",
+    "test:integration": "node --test tests/hotel.test.js tests/legacy-tour-sync-cargo.integration.test.js",
     "test:e2e": "npm run db:init && npm run db:seed && node scripts/run-e2e.js",
     "test:e2e:headed": "npm run db:init && npm run db:seed && node scripts/run-e2e.js --headed",
     "smoke:production": "node scripts/production-smoke.js",
