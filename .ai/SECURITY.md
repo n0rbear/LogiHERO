@@ -19,10 +19,11 @@ Current source must be inspected before relying on any claim below.
 - `/api/live-status/:name`, `/api/get-history/:driverName/:date`, and `/api/stats/:driverName` allow admin/session access or authenticated device access only for the server-derived owning driver.
 - `/api/fleet-status` and `/api/all-drivers` are admin-only; ordinary driver devices cannot read fleet-wide or driver-selector data.
 - Every unsafe route authenticated with `requireAdmin` also requires `requireAdminWrite`, except session logout. This includes legacy cost/tour writes and development seed/reset routes, so READ_ONLY bearer credentials are rejected before database or import handlers run.
+- Generic sync can no longer set `costs.status` (bypassing the admin-only payment/approval workflow), cannot create or mutate `cargo` rows at all (cargo has no mobile creation endpoint and its lifecycle is admin/dedicated-transition-only), cannot set `hotels.status`/`deleted_at` (bypassing terminal-state protection and audit logging), and cannot mutate a `work_days` row or its `work_time_entries` once an admin has approved it.
 
 ## Known high-risk gaps from current source
 
-- Generic sync still needs a domain-invariant audit beyond ownership, because owner-scoped writes do not always pass through each domain route's lifecycle validation.
+- Generic sync still lets a driver device bypass the cargo/hotel tour-completion-blocking check via `tours.tour_status`/`is_closed`, and the cargo-blocking stop-completion check via `stops.stop_status`/`is_completed`. Unlike the costs/cargo/hotels/work-time gaps closed in the 2026-09-06 domain invariant audit, these two were left open because blocking either field could break a legitimate offline-first mobile completion flow that could not be confirmed from backend source alone. See TD-004.
 - AI usage limiting is process-local and resets on backend restart; use a shared/durable limiter if deployment scales beyond one backend instance.
 - NDP runtime events may miss commit SHA correlation.
 

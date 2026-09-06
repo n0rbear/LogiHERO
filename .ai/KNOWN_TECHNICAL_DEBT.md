@@ -4,6 +4,8 @@ Severity reflects current repository evidence as of 2026-09-06.
 
 The 2026-09-06 admin write authorization audit found and closed the remaining READ_ONLY bearer gaps on legacy cost/tour and development seed/reset routes. All unsafe `requireAdmin` route declarations now also require `requireAdminWrite`, with session logout as the sole intentional non-business-data exception.
 
+A follow-up 2026-09-06 domain invariant audit of generic `/api/sync` found and closed four confirmed non-ownership bypasses (cost approval/payment status, unauthorized cargo creation and status/deletion, hotel status/deletion, and writes to admin-approved work days/entries). See TD-004 for what remains open.
+
 ## Critical
 
 No current CRITICAL security debt remains from the legacy mobile/public endpoint authorization inventory after the dashboard telemetry checkpoint. Re-open this section if a new endpoint inventory proves another public/mobile route can disclose or mutate another driver's/company's data without admin/session/device ownership.
@@ -42,9 +44,13 @@ Next evidence needed: production provider smoke with a non-sensitive prompt and 
 
 ### TD-004 - Remaining domain-specific sync invariant audit
 
-Current evidence: Generic `/api/sync` now enforces authenticated driver/company scope, validates owned relations, rolls back scope-denied batches, and strips server-only activation/admin approval fields.
+Current evidence: Generic `/api/sync` now enforces authenticated driver/company scope, validates owned relations, rolls back scope-denied batches, and strips server-only activation/admin approval fields. A 2026-09-06 domain invariant audit additionally confirmed and closed: `costs.status` was writable via generic sync, bypassing the admin-only `/admin/update-cost-status` allow-list (now stripped); generic sync could create or mutate `cargo` rows with no admin-only creation gate and no `ADMIN_STATUS_TRANSITIONS`/terminal-state/duplicate-serial/audit-trail enforcement (now rejected entirely — `CARGO_SYNC_WRITE_NOT_SUPPORTED`); `hotels.status`/`deleted_at` were writable, bypassing `HotelEngine`'s terminal-state protection and `hotel_events` audit log, and enabling a soft-delete mobile has no dedicated endpoint for (now stripped); and `work_days`/`work_time_entries` could be mutated after admin approval, bypassing the `APPROVED_RECORD_LOCKED`/`ADMIN_CORRECTED_RECORD_LOCKED` guard (now rejected as `WORK_DAY_LOCKED`). Focused regression tests in `tests/sync-domain-invariant.test.js` cover all four, each confirmed to fail pre-fix.
 
-Remaining evidence: Generic writes still upsert allowed owner-scoped entities directly rather than routing every mutation through each domain route's full validation/audit workflow. Additional domain-by-domain review is still needed for non-ownership invariants such as cargo transitions, hotel lifecycle, and work-time approval semantics.
+Remaining evidence: `tours.tour_status`/`is_closed` can still be set via generic sync, bypassing the cargo/hotel completion-blocking check enforced in `PATCH /api/tours/:id` (a driver could silently mark their own tour COMPLETED while cargo is still in transit or a hotel is still checked in, without the `override_reason` audit trail the dedicated route requires). `stops.stop_status`/`is_completed` can similarly bypass the cargo-blocking check in the dedicated stop-complete endpoint. Both were left open in this checkpoint because blocking either field could break a legitimate offline-first mobile completion flow that cannot be confirmed or ruled out from backend source alone — closing them needs either Android client evidence of how/when these fields are actually written via generic sync, or a narrowly scoped state-check guard (reusing `checkCargoBlocking`/`HotelEngine.checkTourCompletionBlockedByHotels` the same way the dedicated routes do) added and tested in its own follow-up change.
+
+Risk: a driver device can currently forge tour/stop completion state through generic sync without triggering the same cargo/hotel safety checks the dedicated completion endpoints enforce.
+
+Next evidence needed: confirm actual Android generic-sync usage for `tour_status`/`is_closed`/`stop_status`/`is_completed`, then add and test the narrowest guard that does not break legitimate offline completion sync.
 
 ### TD-005 - Startup schema mutation remains primary schema owner
 

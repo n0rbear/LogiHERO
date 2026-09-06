@@ -13,6 +13,12 @@ const SERVER_ONLY_FIELDS = new Set([
     'manual_edit',
     'correction_reason'
 ]);
+// Entity-specific fields with a dedicated lifecycle workflow (status transitions, audit
+// logging, terminal-state locks) that generic sync must not be able to set directly.
+const ENTITY_LOCKED_FIELDS = {
+    costs: ['status'],
+    hotels: ['status', 'deleted_at']
+};
 
 const snake = (key) => key.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
 const camel = (key) => key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -81,6 +87,13 @@ function rejectScope(error, uuid = null) {
     return { status: 'scope_denied', error, uuid };
 }
 
+function isWorkDayLocked(day) {
+    if (!day) return false;
+    return day.approval_status === 'APPROVED'
+        || Boolean(day.admin_note)
+        || (Array.isArray(day.anomaly_flags) && day.anomaly_flags.includes('ADMIN_CORRECTED'));
+}
+
 function assertRecordOwnerFields(config, record, auth) {
     const uuid = recordValue(record, 'uuid') || recordValue(record, 'device_id') || null;
     const companyUuid = recordValue(record, 'company_uuid');
@@ -109,6 +122,7 @@ function assertRecordOwnerFields(config, record, auth) {
 
 function applyServerScope(config, record, auth) {
     for (const field of SERVER_ONLY_FIELDS) delete record[field];
+    for (const field of ENTITY_LOCKED_FIELDS[config.entity] || []) delete record[field];
     if (config.fields.includes('company_uuid')) record.company_uuid = auth.companyUuid;
     if (config.fields.includes('driver_uuid')) record.driver_uuid = auth.driverUuid;
     if (config.fields.includes('driver_name')) record.driver_name = auth.driverName;
@@ -175,16 +189,17 @@ async function assertOwnedRelations(client, config, record, auth) {
 
     const workDayUuid = recordValue(record, 'work_day_uuid');
     if (workDayUuid && config.entity === 'work_time_entries') {
-        const ok = await relationOwned(
-            client,
-            `SELECT uuid FROM work_days
+        const dayResult = await client.query(
+            `SELECT approval_status, admin_note, anomaly_flags FROM work_days
              WHERE uuid::text = $4
                AND deleted_at IS NULL
                AND ${ownerScopeWhere(SYNC_TABLES.work_days, 0)}
              LIMIT 1`,
             [...params, String(workDayUuid)]
         );
-        if (!ok) return rejectScope('WORK_DAY_SCOPE_DENIED', recordValue(record, 'uuid'));
+        const day = dayResult.rows[0];
+        if (!day) return rejectScope('WORK_DAY_SCOPE_DENIED', recordValue(record, 'uuid'));
+        if (isWorkDayLocked(day)) return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid: recordValue(record, 'uuid') };
     }
 
     return null;
@@ -235,6 +250,13 @@ async function applyChange(client, req, config, rawRecord, startedAt) {
         return { status: 'rejected', error: 'Invalid UUID', uuid };
     }
 
+    // Cargo has no mobile creation path (dispatched by admin only) and its status/lifecycle
+    // is owned by dedicated pickup/deliver/report endpoints with their own audit trail and
+    // terminal-state locks. Generic sync must not be able to create or mutate cargo rows.
+    if (config.entity === 'cargo') {
+        return { status: 'rejected', error: 'CARGO_SYNC_WRITE_NOT_SUPPORTED', uuid: uuid || null };
+    }
+
     const keyColumn = config.entity === 'devices' ? 'device_id' : 'uuid';
     const keyValue = config.entity === 'devices' ? record.device_id || record.deviceId : uuid;
     if (!keyValue) return { status: 'rejected', error: 'Missing sync key', uuid: null };
@@ -252,6 +274,10 @@ async function applyChange(client, req, config, rawRecord, startedAt) {
             [String(keyValue), ...driverScopeParams(req.deviceAuth)]
         )).rows[0];
         if (!ownedExisting) return rejectScope('DRIVER_SCOPE_DENIED', String(keyValue));
+    }
+
+    if (existing && config.entity === 'work_days' && isWorkDayLocked(existing)) {
+        return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid: String(keyValue) };
     }
 
     const relationError = await assertOwnedRelations(client, config, { ...rawRecord, ...record }, req.deviceAuth);

@@ -3,6 +3,27 @@
 ## Current checkpoint
 
 - Date: 2026-09-06.
+- Branch: `claude/sync-domain-invariant-audit`.
+- Objective: audit whether authenticated, owner-scoped generic `/api/sync` writes can bypass a dedicated domain route's business rules (TD-004), and close any confirmed bypass with the narrowest safe guard.
+
+## What changed in this checkpoint
+
+- Built a full inventory of every entity generic `/api/sync` can create/update/delete (`drivers`, `tours`, `stops`, `hotels`, `cargo`, `devices`, `work_times`, `work_days`, `work_time_entries`, `costs`) and compared each against its dedicated route(s) and business-rule engine. Ownership scoping was already closed by the prior generic sync checkpoint; this audit targeted non-ownership invariants (status/lifecycle fields, admin-only creation gates, audit trails, approval locks).
+- Confirmed bypasses, all reachable by a device-authenticated driver acting only within their own owner scope:
+  - `costs.status` — generic sync could set a cost's approval/payment status directly, bypassing the admin-only `/admin/update-cost-status` allow-list. The legacy mobile cost-sync endpoint already blocks this same write; the generic path did not.
+  - `cargo` (all writes) — cargo has no mobile creation endpoint at all (creation is `requireAdmin`-only), yet generic sync let a driver create arbitrary cargo rows in their own tour. Existing cargo could also have `status`/`deleted_at` set directly, bypassing `ADMIN_STATUS_TRANSITIONS`, the terminal-state override requirement, the "cannot delete cargo already in transit" rule, the duplicate-serial check, and the entire `cargo_events` audit trail.
+  - `hotels.status` / `hotels.deleted_at` — generic sync could set hotel status directly, bypassing `HotelEngine.transitionHotelStatus`'s terminal-state protection (`CHECKED_OUT`/`CANCELLED` require an override reason) and `hotel_events` audit logging, and could soft-delete a hotel even though mobile has no dedicated hotel-delete endpoint.
+  - `work_days` / `work_time_entries` — generic sync could still upsert a work day the admin already approved (or an entry under one), bypassing the `APPROVED_RECORD_LOCKED` / `ADMIN_CORRECTED_RECORD_LOCKED` guard the dedicated correction endpoint enforces.
+- Fixes applied in `src/routes/sync.routes.js`, all narrow field/entity guards (no rewrite of the generic sync engine, no duplicated state-machine logic):
+  - `ENTITY_LOCKED_FIELDS`, parallel to the existing `SERVER_ONLY_FIELDS` pattern, strips `costs.status` and `hotels.status`/`hotels.deleted_at` from client-writable fields.
+  - Every `cargo` push is now rejected with `CARGO_SYNC_WRITE_NOT_SUPPORTED`; cargo lifecycle must go through the dedicated admin CRUD and driver transition endpoints. `GET /api/sync` reads are unaffected.
+  - `isWorkDayLocked()` gates writes to a `work_days` row that is `APPROVED` or admin-corrected, and to any `work_time_entries` row whose parent work day is locked (extends the existing work-day-ownership relation query rather than adding a new one), both rejected as `WORK_DAY_LOCKED`.
+- Left open, documented but not implemented (see TD-004): `tours.tour_status`/`is_closed` can still bypass the cargo/hotel completion-blocking check in `PATCH /api/tours/:id`, and `stops.stop_status`/`is_completed` can still bypass the cargo-blocking check in the dedicated stop-complete endpoint. Both were left unfixed because blocking either field risks breaking a legitimate offline-first mobile completion flow that could not be confirmed or ruled out from backend source alone.
+- Added `tests/sync-domain-invariant.test.js` (6 tests). Each was confirmed to fail against the pre-fix code and pass after the fix via a temporary revert-and-rerun, not just written and assumed to be correct.
+
+## Previous admin write authorization checkpoint
+
+- Date: 2026-09-06.
 - Branch: `codex/admin-write-authorization-closure`.
 - Objective: close every remaining READ_ONLY authorization gap on unsafe routes authenticated with `requireAdmin`.
 
