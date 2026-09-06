@@ -11,6 +11,7 @@ const {
 } = require('../utils/mobile-scope');
 const ndp = require('../integrations/ndp-client');
 const TourCore = require('../engines/tour-core-engine');
+const { checkCargoBlocking } = require('../engines/cargo-blocking');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
 
 function numberOrNull(value) {
@@ -71,33 +72,6 @@ async function getTourWithStops(client, id) {
     const stopsRes = await client.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC, id ASC', [id]);
     const cargoRes = await client.query('SELECT * FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL', [id]);
     return { tour, stops: stopsRes.rows.map(TourCore.normalizeStop), cargo: cargoRes.rows };
-}
-
-async function checkCargoBlocking(client, tourId, stopId = null) {
-    const query = stopId
-        ? `SELECT id, name, serial_number, status, pickup_stop_id, delivery_stop_id
-           FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL AND (pickup_stop_id = $2 OR delivery_stop_id = $2)`
-        : `SELECT id, name, serial_number, status, pickup_stop_id, delivery_stop_id
-           FROM cargo WHERE tour_id = $1 AND deleted_at IS NULL`;
-
-    const res = await client.query(query, stopId ? [tourId, stopId] : [tourId]);
-    const blocking = [];
-
-    for (const c of res.rows) {
-        if (stopId) {
-            if (c.pickup_stop_id === stopId && ['PLANNED', 'READY_FOR_PICKUP'].includes(c.status)) {
-                blocking.push({ ...c, requiredAction: 'PICKUP_REQUIRED' });
-            } else if (c.delivery_stop_id === stopId && ['PICKED_UP', 'IN_TRANSIT'].includes(c.status)) {
-                blocking.push({ ...c, requiredAction: 'DELIVERY_REQUIRED' });
-            }
-        } else {
-            // General tour blocking
-            if (['PLANNED', 'READY_FOR_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'DAMAGED', 'MISSING'].includes(c.status)) {
-                blocking.push({ ...c, requiredAction: 'UNRESOLVED_CARGO' });
-            }
-        }
-    }
-    return blocking;
 }
 
 async function latestLocation(client, tour) {

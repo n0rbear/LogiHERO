@@ -23,7 +23,7 @@ Current source must be inspected before relying on any claim below.
 
 ## Known high-risk gaps from current source
 
-- `POST /api/sync-tours/:driverName` (`ImportEngine.processTour`) — the route Android's tour/stop lifecycle sync actually uses — does not re-verify pending cargo pickup/delivery blocking server-side before accepting a client-supplied `stop_status = COMPLETED`. Only the Android client (`ToursViewModel.markStopCompleted()`/`DashboardViewModel.completeStop()`) checks this today. See TD-009.
+- `POST /api/sync-tours/:driverName` (`ImportEngine.processTour`) — the route Android's tour/stop lifecycle sync actually uses — did not re-verify pending cargo pickup/delivery blocking server-side before accepting a client-supplied `stop_status = COMPLETED`; only the Android client checked it. Reproduced against main `6a32d07` and fixed on branch `claude/legacy-tour-sync-cargo-blocking` (not yet merged): the cargo-blocking rule now lives in `src/engines/cargo-blocking.js` and is shared by the dedicated stop-complete endpoint and the legacy bulk sync. See TD-009.
 - AI usage limiting is process-local and resets on backend restart; use a shared/durable limiter if deployment scales beyond one backend instance.
 - NDP runtime events may miss commit SHA correlation.
 

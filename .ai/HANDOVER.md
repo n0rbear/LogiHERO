@@ -3,6 +3,24 @@
 ## Current checkpoint
 
 - Date: 2026-09-06.
+- Branch: `claude/legacy-tour-sync-cargo-blocking` (branched from merged main `6a32d07`).
+- Objective: reproduce and close TD-009 — the legacy mobile bulk tour sync accepting a stop completion without re-checking pending cargo.
+
+## What changed in this checkpoint
+
+- Reproduced the bypass against merged main `6a32d07` before writing any fix, for both variants: a pending pickup (`READY_FOR_PICKUP`) and a pending delivery (`IN_TRANSIT`) at the stop. In both, `POST /api/sync-tours/:driverName` committed with the stop completed.
+- Confirmed the cargo-blocking rule from source: cargo blocks a stop when it is that stop's pickup and is `PLANNED`/`READY_FOR_PICKUP`, or that stop's delivery and is `PICKED_UP`/`IN_TRANSIT`. `DELIVERED`/`CANCELLED`/`REJECTED`/`DAMAGED`/`MISSING` do not block per-stop completion; soft-deleted cargo never blocks.
+- Extracted `checkCargoBlocking` verbatim from `tour-core.routes.js` into `src/engines/cargo-blocking.js`, now required by both the dedicated stop-complete endpoint and `ImportEngine`, so the two cannot drift into subtly different rules.
+- `ImportEngine.processTour` refuses cargo-blocked completions on mobile syncs. Two ordering facts shaped this:
+  - Cargo updates land *after* the stop upsert in the same transaction, so the check runs last and reads the post-sync state. A driver who picked cargo up and closed the stop offline still syncs both together.
+  - Android re-sends every tour each cycle, so only stops this payload actually transitions to completed are checked; an already-completed stop is left alone and cannot start failing later if cargo returns to a pending state.
+- A refused completion reverts just that stop inside the same transaction and lets the rest of the sync commit — the same philosophy as the route's existing monotonic merge — instead of failing the driver's whole tour sync. Logged and reported to NDP as `stop_completion_blocked_by_cargo`.
+- Added `tests/legacy-tour-sync-cargo-blocking.test.js` (6 tests): both bypass variants (each confirmed to fail against `6a32d07`), satisfied cargo, terminal cargo, the legitimate offline pickup+complete batch, and the already-completed re-send case.
+- Not addressed here: this route also lets a mobile payload set cargo `status` directly. That is a separate question from stop completion and was deliberately left out of scope.
+
+## Previous TD-004 checkpoint (merged as main `6a32d07`, PR #4)
+
+- Date: 2026-09-06.
 - Branch: `claude/sync-domain-invariant-audit`.
 - Objective: verify a pre-merge review finding that the `work_time_entries` approved-work-day guard added earlier in this branch was itself bypassable, and close it before TD-004 may be claimed complete.
 

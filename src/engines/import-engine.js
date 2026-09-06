@@ -1,4 +1,5 @@
 const AddressEngine = require('./address-engine');
+const { checkCargoBlocking } = require('./cargo-blocking');
 
 const ImportEngine = {
     async processTour(client, driverName, tourData, stopsData, options = {}) {
@@ -54,6 +55,15 @@ const ImportEngine = {
 
         if (deletedStopUuids.length > 0 && !isMobileSync) {
             await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid::text = ANY($3::text[]) AND (updated_at IS NULL OR updated_at <= $1)', [tour.updated_at, tourId, deletedStopUuids]);
+        }
+
+        // Captured before the upsert so a completion can be told apart from a stop the server
+        // already had completed: Android re-sends every tour on each sync cycle, and re-sending
+        // an already-completed stop must never start failing because of later cargo changes.
+        const priorStopState = new Map();
+        if (isMobileSync && tourId) {
+            const priorRes = await client.query('SELECT uuid, is_completed, stop_status FROM stops WHERE tour_id = $1', [tourId]);
+            for (const row of priorRes.rows) priorStopState.set(String(row.uuid), row);
         }
 
         const currentUuids = [];
@@ -164,8 +174,64 @@ const ImportEngine = {
             }
         }
 
+        if (isMobileSync && tourId) {
+            await refuseCargoBlockedCompletions(client, tourId, groupedStops, priorStopState);
+        }
+
         return tourId;
     }
 };
+
+function isCompletedState(status, isCompleted) {
+    return Boolean(isCompleted) || ['COMPLETED', 'SKIPPED'].includes(status);
+}
+
+// The dedicated stop-complete endpoint refuses to close a stop while cargo pickup/delivery is
+// still outstanding. The legacy bulk sync applied the same completion without that check, so a
+// modified client or a direct API call could close the stop anyway. Cargo updates for this sync
+// land earlier in this same transaction, so the check runs last and reads the final state: a
+// driver who picked the cargo up and closed the stop offline still syncs both together.
+// A refused transition reverts only that stop, leaving the rest of the sync intact, which
+// matches how this route already refuses illegal transitions through its monotonic merge.
+async function refuseCargoBlockedCompletions(client, tourId, groupedStops, priorStopState) {
+    const candidates = [];
+    for (const s of groupedStops.values()) {
+        const main = s.items[0];
+        if (!main.uuid || !isCompletedState(main.stop_status, main.is_completed)) continue;
+        const prior = priorStopState.get(String(main.uuid));
+        if (prior && isCompletedState(prior.stop_status, prior.is_completed)) continue;
+        candidates.push({ uuid: String(main.uuid), prior });
+    }
+    if (candidates.length === 0) return;
+
+    const idRes = await client.query('SELECT uuid, id FROM stops WHERE tour_id = $1', [tourId]);
+    const idByUuid = new Map(idRes.rows.map(row => [String(row.uuid), row.id]));
+
+    for (const candidate of candidates) {
+        const stopId = idByUuid.get(candidate.uuid);
+        if (stopId === undefined || stopId === null) continue;
+        const blocking = await checkCargoBlocking(client, tourId, Number(stopId));
+        if (blocking.length === 0) continue;
+
+        await client.query(
+            'UPDATE stops SET stop_status = $1, is_completed = $2, updated_at = $3 WHERE uuid::text = $4',
+            [candidate.prior?.stop_status || 'PENDING', Boolean(candidate.prior?.is_completed), Date.now(), candidate.uuid]
+        );
+        console.warn(`[CARGO] Refused stop completion via mobile sync: tour=${tourId} stop=${stopId} blocking=${blocking.length}`);
+        const ndp = require('../integrations/ndp-client');
+        await ndp.trackEvent({
+            traceId: 'sync-' + Date.now(),
+            eventType: 'stop_completion_blocked_by_cargo',
+            title: 'Stop completion refused during mobile sync',
+            component: 'cargo',
+            payload: {
+                tourId: String(tourId),
+                stopId: String(stopId),
+                blockingCount: String(blocking.length),
+                requiredActions: blocking.map(item => item.requiredAction).join(',')
+            }
+        });
+    }
+}
 
 module.exports = ImportEngine;
