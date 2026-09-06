@@ -14,7 +14,7 @@ Report exact commands and outcomes. Do not convert blocked checks into PASS.
 ## Common commands
 
 - `npm test`
-- `npm run test:integration` (covers `tests/hotel.test.js` and `tests/legacy-tour-sync-cargo.integration.test.js`; both self-skip without a reachable PostgreSQL, and a skip is never a PASS)
+- `npm run test:integration` (covers `tests/hotel.test.js`, `tests/legacy-tour-sync-cargo.integration.test.js` and `tests/legacy-tour-sync-owner-scope.integration.test.js`; all self-skip without a reachable PostgreSQL, and a skip is never a PASS)
 - `npm run test:e2e`
 - `npm run typecheck`
 - `node scripts/secret-scan.js`

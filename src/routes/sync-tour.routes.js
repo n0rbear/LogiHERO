@@ -19,6 +19,12 @@ const createSyncTourRoutes = ({ ImportEngine }) => {
     syncTourRoutes.post('/api/sync-tours/:driverName', requireDeviceAuth, async (req, res, next) => {
         const driverName = requireAuthenticatedDriverName(req, res);
         if (!driverName) return;
+        // Server-derived identity only: the payload never decides whose tour this is.
+        const owner = {
+            driverUuid: req.deviceAuth.driverUuid,
+            driverName,
+            companyUuid: req.deviceAuth.companyUuid || null
+        };
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
@@ -26,11 +32,18 @@ const createSyncTourRoutes = ({ ImportEngine }) => {
                 if (!item.tour) continue;
                 if (item.tour.deletedAt && item.tour.uuid) {
                     const now = Date.now();
-                    await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id IN (SELECT id FROM tours WHERE uuid::text = $2 AND driver_name = $3)', [now, item.tour.uuid, driverName]);
-                    await client.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE uuid::text = $2 AND driver_name = $3', [now, item.tour.uuid, driverName]);
+                    // Same ownership rule as every other tour read: driver UUID, falling back
+                    // to the name only for legacy rows that predate driver_uuid, plus company.
+                    const ownedTour = `SELECT id FROM tours
+                         WHERE uuid::text = $2
+                           AND (driver_uuid = $3::uuid OR (driver_uuid IS NULL AND driver_name = $4))
+                           AND ($5::uuid IS NULL OR company_uuid IS NULL OR company_uuid = $5::uuid)`;
+                    const deleteParams = [now, item.tour.uuid, owner.driverUuid, owner.driverName, owner.companyUuid];
+                    await client.query(`UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id IN (${ownedTour})`, deleteParams);
+                    await client.query(`UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id IN (${ownedTour})`, deleteParams);
                     continue;
                 }
-                await ImportEngine.processTour(client, driverName, item.tour, item.stops || [], { source: 'mobile', cargo: item.cargo || [] });
+                await ImportEngine.processTour(client, driverName, item.tour, item.stops || [], { source: 'mobile', cargo: item.cargo || [], owner });
             }
             await client.query('COMMIT');
             res.sendStatus(200);

@@ -56,7 +56,8 @@ function createApp({ cargo = [] } = {}) {
     const pool = require('../src/database/pool');
     const calls = [];
     const db = {
-        tours: [{ id: TOUR_ID, uuid: TOUR_UUID, updated_at: 100 }],
+        // Owned by the authenticated driver, as a real row would be.
+        tours: [{ id: TOUR_ID, uuid: TOUR_UUID, updated_at: 100, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', company_uuid: null }],
         stops: [{ id: STOP_ID, uuid: STOP_UUID, tour_id: TOUR_ID, stop_status: 'PENDING', is_completed: false, order_index: 0 }],
         cargo: cargo.map(item => ({
             id: 1,
@@ -75,9 +76,9 @@ function createApp({ cargo = [] } = {}) {
         calls.push({ sql, params });
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 };
 
-        if (sql.includes('SELECT id, updated_at FROM tours WHERE uuid')) {
+        if (sql.startsWith('SELECT') && sql.includes('FROM tours WHERE uuid')) {
             const row = db.tours.find(t => t.uuid === params[0]);
-            return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+            return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 };
         }
 
         // Prior stop state lookup (used by the fix to detect real transitions). Rows are

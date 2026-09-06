@@ -3,6 +3,23 @@
 ## Current checkpoint
 
 - Date: 2026-09-06.
+- Branch: `claude/legacy-tour-sync-owner-scope` (branched from merged main `e7fe81b`).
+- Objective: close TD-010 — the legacy mobile tour sync resolving a client-supplied tour UUID without owner scope.
+
+## What changed in this checkpoint
+
+- Re-reproduced TD-010 independently against merged main `e7fe81b` before changing anything, driving the real route with real device authentication against real PostgreSQL. Confirmed: foreign-tour cargo mutation, foreign-stop mutation, and foreign-stop *creation* — the last needing only the tour UUID, no child identifier.
+- Found a sibling variant the original note had not identified: on a tour genuinely owned by the caller, a stop UUID belonging to another tour could still be advanced, because the stop upsert conflicted on `uuid` globally without checking `tour_id`. Same root cause — a child trusted once its parent was authorized.
+- Ownership model established from source rather than copied: `req.deviceAuth` carries a server-derived `driverUuid`, `driverName` and `companyUuid`; `drivers.name` is UNIQUE but mutable, so `driver_uuid` is canonical. `ImportEngine` writes tours with `driver_name` only, so legacy rows have a NULL `driver_uuid` and must keep working — which is exactly why `ensureTourOwned`'s "UUID, else name for NULL-uuid rows, plus company" shape is the right rule to mirror.
+- Fix: the route derives an `owner` from `req.deviceAuth` alone and hands it to `processTour`, which refuses any existing tour that fails `isTourOwnedBy`. The stop upsert gained `stops.tour_id = EXCLUDED.tour_id`. The sibling delete path was aligned to the same rule rather than matching on `driver_name` alone. New mobile tours are stamped with the authenticated `driver_uuid`/`company_uuid`.
+- Android still creates tours locally (`ToursViewModel.addTour`, AI import), so unknown UUIDs are still created — but ownership comes from the device, and a payload claiming a different `driver_name` is ignored.
+- Foreign tours are skipped silently with a 200, so the route gives no existence oracle; the refusal is logged server-side with the tour id only.
+- The admin/import caller passes no `owner` and is unchanged.
+- Two test-harness gaps were fixed along the way: the mocked cargo suites matched the tour lookup by its old literal SQL and their fake tour rows carried no ownership columns, so they broke once the query changed shape. Both now model rows that genuinely belong to the authenticated driver.
+
+## Previous TD-009 checkpoint (merged as main `e7fe81b`, PR #5)
+
+- Date: 2026-09-06.
 - Branch: `claude/legacy-tour-sync-cargo-blocking` (branched from merged main `6a32d07`).
 - Objective: reproduce and close TD-009 — the legacy mobile bulk tour sync accepting a stop completion without re-checking pending cargo.
 
