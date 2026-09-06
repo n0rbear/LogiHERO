@@ -12,6 +12,8 @@ const CARGO_A_UUID = '99999999-9999-4999-8999-999999999999';
 const WORK_DAY_LOCKED_UUID = 'aaaaaaaa-1111-4111-8111-111111111111';
 const WORK_DAY_OPEN_UUID = 'bbbbbbbb-1111-4111-8111-111111111111';
 const WORK_ENTRY_UUID = 'cccccccc-1111-4111-8111-111111111111';
+const TOUR_A_UUID = 'dddddddd-1111-4111-8111-111111111111';
+const STOP_A_UUID = 'eeeeeeee-1111-4111-8111-111111111111';
 
 function clearProjectModules() {
     for (const key of Object.keys(require.cache)) {
@@ -70,6 +72,8 @@ function createApp(options = {}) {
         workDayLockedRow: { uuid: WORK_DAY_LOCKED_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', approval_status: 'APPROVED', admin_note: null, anomaly_flags: [], updated_at: 10, revision: 1 },
         workDayOpenRow: { uuid: WORK_DAY_OPEN_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', approval_status: 'PENDING', admin_note: null, anomaly_flags: [], updated_at: 10, revision: 1 },
         workEntryRow: { uuid: WORK_ENTRY_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', work_day_uuid: WORK_DAY_LOCKED_UUID, updated_at: 10, revision: 1 },
+        tourARow: { uuid: TOUR_A_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', name: 'Tour A', tour_status: 'IN_PROGRESS', is_closed: false, updated_at: 10, revision: 1 },
+        stopARow: { uuid: STOP_A_UUID, company_uuid: COMPANY_A_UUID, driver_uuid: DRIVER_A_UUID, tour_id: 1, address: 'Stop A', stop_status: 'PENDING', is_completed: false, updated_at: 10, revision: 1 },
         ...options.state
     };
 
@@ -134,12 +138,26 @@ function createApp(options = {}) {
                 return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
             }
         }
+        if (sql.startsWith('SELECT') && sql.includes('FROM tours') && !sql.includes('sync_scope_t')) {
+            if (sql.includes('uuid::text = $1')) {
+                const row = params[0] === TOUR_A_UUID ? state.tourARow : null;
+                return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+            }
+        }
+        if (sql.startsWith('SELECT') && sql.includes('FROM stops')) {
+            if (sql.includes('uuid::text = $1')) {
+                const row = params[0] === STOP_A_UUID ? state.stopARow : null;
+                return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+            }
+        }
 
         if (sql.includes('INSERT INTO costs')) return { rows: [{ ...state.costARow, ...rowFromInsert(sql, params).row }], rowCount: 1 };
         if (sql.includes('INSERT INTO hotels')) return { rows: [{ ...state.hotelARow, ...rowFromInsert(sql, params).row }], rowCount: 1 };
         if (sql.includes('INSERT INTO cargo')) return { rows: [{ uuid: CARGO_A_UUID, ...rowFromInsert(sql, params).row }], rowCount: 1 };
         if (sql.includes('INSERT INTO work_days')) return { rows: [{ ...state.workDayOpenRow, ...rowFromInsert(sql, params).row }], rowCount: 1 };
         if (sql.includes('INSERT INTO work_time_entries')) return { rows: [{ ...state.workEntryRow, ...rowFromInsert(sql, params).row }], rowCount: 1 };
+        if (sql.includes('INSERT INTO tours')) return { rows: [{ ...state.tourARow, ...rowFromInsert(sql, params).row }], rowCount: 1 };
+        if (sql.includes('INSERT INTO stops')) return { rows: [{ ...state.stopARow, ...rowFromInsert(sql, params).row }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
     }
 
@@ -244,4 +262,34 @@ test('generic sync cannot mutate an entry belonging to an already-approved work 
     const body = JSON.parse(res.text);
     assert.equal(body.rejected[0].error, 'WORK_DAY_LOCKED');
     assert.equal(calls.some(call => call.sql.includes('INSERT INTO work_time_entries')), false);
+});
+
+test('generic sync cannot set tour_status or is_closed on an existing tour (bypassing completion-blocking)', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync',
+        headers: authHeaders(),
+        body: { changes: { tours: [{ uuid: TOUR_A_UUID, driverUuid: DRIVER_A_UUID, driverName: 'Driver A', companyUuid: COMPANY_A_UUID, name: 'Tour A', tourStatus: 'COMPLETED', isClosed: true, revision: 1 }] } }
+    });
+    assert.equal(res.status, 200, res.text);
+    const insertCall = calls.find(call => call.sql.includes('INSERT INTO tours'));
+    assert.ok(insertCall, 'expected an INSERT INTO tours call');
+    assert.equal(insertCall.sql.includes('tour_status'), false, 'generic sync must not write tours.tour_status');
+    assert.equal(insertCall.sql.includes('is_closed'), false, 'generic sync must not write tours.is_closed');
+});
+
+test('generic sync cannot set stop_status or is_completed on an existing stop (bypassing cargo-blocking)', async () => {
+    const { app, calls } = createApp();
+    const res = await request(app, {
+        method: 'POST',
+        path: '/api/sync',
+        headers: authHeaders(),
+        body: { changes: { stops: [{ uuid: STOP_A_UUID, driverUuid: DRIVER_A_UUID, companyUuid: COMPANY_A_UUID, address: 'Stop A', stopStatus: 'COMPLETED', isCompleted: true, revision: 1 }] } }
+    });
+    assert.equal(res.status, 200, res.text);
+    const insertCall = calls.find(call => call.sql.includes('INSERT INTO stops'));
+    assert.ok(insertCall, 'expected an INSERT INTO stops call');
+    assert.equal(insertCall.sql.includes('stop_status'), false, 'generic sync must not write stops.stop_status');
+    assert.equal(insertCall.sql.includes('is_completed'), false, 'generic sync must not write stops.is_completed');
 });

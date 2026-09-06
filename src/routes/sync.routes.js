@@ -17,7 +17,15 @@ const SERVER_ONLY_FIELDS = new Set([
 // logging, terminal-state locks) that generic sync must not be able to set directly.
 const ENTITY_LOCKED_FIELDS = {
     costs: ['status'],
-    hotels: ['status', 'deleted_at']
+    hotels: ['status', 'deleted_at'],
+    // Confirmed unused by any current Android call site (only `work_times` is ever pushed
+    // through generic sync; tours/stops lifecycle sync exclusively uses the dedicated
+    // POST /api/sync-tours/:driverName route). Blocking these here closes the
+    // cargo/hotel completion-blocking bypass in PATCH /api/tours/:id and the
+    // cargo-blocking bypass in the dedicated stop-complete endpoint, with no loss of
+    // legitimate mobile functionality.
+    tours: ['tour_status', 'is_closed'],
+    stops: ['stop_status', 'is_completed']
 };
 
 const snake = (key) => key.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
