@@ -13,6 +13,20 @@ const SERVER_ONLY_FIELDS = new Set([
     'manual_edit',
     'correction_reason'
 ]);
+// Entity-specific fields with a dedicated lifecycle workflow (status transitions, audit
+// logging, terminal-state locks) that generic sync must not be able to set directly.
+const ENTITY_LOCKED_FIELDS = {
+    costs: ['status'],
+    hotels: ['status', 'deleted_at'],
+    // Confirmed unused by any current Android call site (only `work_times` is ever pushed
+    // through generic sync; tours/stops lifecycle sync exclusively uses the dedicated
+    // POST /api/sync-tours/:driverName route). Blocking these here closes the
+    // cargo/hotel completion-blocking bypass in PATCH /api/tours/:id and the
+    // cargo-blocking bypass in the dedicated stop-complete endpoint, with no loss of
+    // legitimate mobile functionality.
+    tours: ['tour_status', 'is_closed'],
+    stops: ['stop_status', 'is_completed']
+};
 
 const snake = (key) => key.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
 const camel = (key) => key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -81,6 +95,13 @@ function rejectScope(error, uuid = null) {
     return { status: 'scope_denied', error, uuid };
 }
 
+function isWorkDayLocked(day) {
+    if (!day) return false;
+    return day.approval_status === 'APPROVED'
+        || Boolean(day.admin_note)
+        || (Array.isArray(day.anomaly_flags) && day.anomaly_flags.includes('ADMIN_CORRECTED'));
+}
+
 function assertRecordOwnerFields(config, record, auth) {
     const uuid = recordValue(record, 'uuid') || recordValue(record, 'device_id') || null;
     const companyUuid = recordValue(record, 'company_uuid');
@@ -109,6 +130,7 @@ function assertRecordOwnerFields(config, record, auth) {
 
 function applyServerScope(config, record, auth) {
     for (const field of SERVER_ONLY_FIELDS) delete record[field];
+    for (const field of ENTITY_LOCKED_FIELDS[config.entity] || []) delete record[field];
     if (config.fields.includes('company_uuid')) record.company_uuid = auth.companyUuid;
     if (config.fields.includes('driver_uuid')) record.driver_uuid = auth.driverUuid;
     if (config.fields.includes('driver_name')) record.driver_name = auth.driverName;
@@ -125,6 +147,18 @@ function applyServerScope(config, record, auth) {
 async function relationOwned(client, sql, params) {
     const result = await client.query(sql, params);
     return Boolean(result.rows[0]);
+}
+
+async function loadOwnedWorkDay(client, workDayUuid, auth) {
+    const result = await client.query(
+        `SELECT approval_status, admin_note, anomaly_flags FROM work_days
+         WHERE uuid::text = $4
+           AND deleted_at IS NULL
+           AND ${ownerScopeWhere(SYNC_TABLES.work_days, 0)}
+         LIMIT 1`,
+        [...driverScopeParams(auth), String(workDayUuid)]
+    );
+    return result.rows[0];
 }
 
 async function assertOwnedRelations(client, config, record, auth) {
@@ -175,18 +209,31 @@ async function assertOwnedRelations(client, config, record, auth) {
 
     const workDayUuid = recordValue(record, 'work_day_uuid');
     if (workDayUuid && config.entity === 'work_time_entries') {
-        const ok = await relationOwned(
-            client,
-            `SELECT uuid FROM work_days
-             WHERE uuid::text = $4
-               AND deleted_at IS NULL
-               AND ${ownerScopeWhere(SYNC_TABLES.work_days, 0)}
-             LIMIT 1`,
-            [...params, String(workDayUuid)]
-        );
-        if (!ok) return rejectScope('WORK_DAY_SCOPE_DENIED', recordValue(record, 'uuid'));
+        const day = await loadOwnedWorkDay(client, workDayUuid, auth);
+        if (!day) return rejectScope('WORK_DAY_SCOPE_DENIED', recordValue(record, 'uuid'));
+        if (isWorkDayLocked(day)) return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid: recordValue(record, 'uuid') };
     }
 
+    return null;
+}
+
+// For an existing entry the STORED parent decides whether it may be edited, mirroring the
+// dedicated correction route, which guards on `entry.work_day_uuid` rather than on anything
+// the client sends. Without this an approved day's entries stay writable by simply omitting
+// work_day_uuid, or by pointing the record at some other open day.
+async function assertExistingEntryUnlocked(client, existing, record, auth) {
+    const storedParent = existing.work_day_uuid;
+    const uuid = existing.uuid ? String(existing.uuid) : null;
+    if (!storedParent) return null;
+
+    const day = await loadOwnedWorkDay(client, storedParent, auth);
+    if (!day) return rejectScope('WORK_DAY_SCOPE_DENIED', uuid);
+    if (isWorkDayLocked(day)) return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid };
+
+    const incomingParent = recordValue(record, 'work_day_uuid');
+    if (incomingParent && String(incomingParent) !== String(storedParent)) {
+        return { status: 'rejected', error: 'WORK_DAY_REPARENT_NOT_SUPPORTED', uuid };
+    }
     return null;
 }
 
@@ -235,6 +282,13 @@ async function applyChange(client, req, config, rawRecord, startedAt) {
         return { status: 'rejected', error: 'Invalid UUID', uuid };
     }
 
+    // Cargo has no mobile creation path (dispatched by admin only) and its status/lifecycle
+    // is owned by dedicated pickup/deliver/report endpoints with their own audit trail and
+    // terminal-state locks. Generic sync must not be able to create or mutate cargo rows.
+    if (config.entity === 'cargo') {
+        return { status: 'rejected', error: 'CARGO_SYNC_WRITE_NOT_SUPPORTED', uuid: uuid || null };
+    }
+
     const keyColumn = config.entity === 'devices' ? 'device_id' : 'uuid';
     const keyValue = config.entity === 'devices' ? record.device_id || record.deviceId : uuid;
     if (!keyValue) return { status: 'rejected', error: 'Missing sync key', uuid: null };
@@ -252,6 +306,15 @@ async function applyChange(client, req, config, rawRecord, startedAt) {
             [String(keyValue), ...driverScopeParams(req.deviceAuth)]
         )).rows[0];
         if (!ownedExisting) return rejectScope('DRIVER_SCOPE_DENIED', String(keyValue));
+    }
+
+    if (existing && config.entity === 'work_days' && isWorkDayLocked(existing)) {
+        return { status: 'rejected', error: 'WORK_DAY_LOCKED', uuid: String(keyValue) };
+    }
+
+    if (existing && config.entity === 'work_time_entries') {
+        const lockError = await assertExistingEntryUnlocked(client, existing, { ...rawRecord, ...record }, req.deviceAuth);
+        if (lockError) return lockError;
     }
 
     const relationError = await assertOwnedRelations(client, config, { ...rawRecord, ...record }, req.deviceAuth);

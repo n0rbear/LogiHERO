@@ -3,6 +3,64 @@
 ## Current checkpoint
 
 - Date: 2026-09-06.
+- Branch: `claude/sync-domain-invariant-audit`.
+- Objective: verify a pre-merge review finding that the `work_time_entries` approved-work-day guard added earlier in this branch was itself bypassable, and close it before TD-004 may be claimed complete.
+
+## What changed in this checkpoint
+
+- **Both reported bypasses reproduced against the then-current branch head `05f356a`** with regression tests written first. In both cases the push completed with `result=ok` and the row was written, with nothing in `rejected`:
+  - **Case 1 (omitted parent):** the lock check lived only in `assertOwnedRelations`, gated on `if (workDayUuid && …)` reading the *incoming* record. A client updating an existing entry that belongs to an APPROVED day simply omitted `work_day_uuid`, the gate never fired, and the remaining fields were written through the `ON CONFLICT` update.
+  - **Case 2 (parent substitution):** supplying a *different, open* day's UUID made the check validate that open day instead of the entry's real parent, so the entry escaped its locked day and was reparented.
+  - Root cause for both: the guard trusted a client-supplied relation to decide whether an existing row was editable, and never consulted `existing.work_day_uuid`.
+- Checked the dedicated route before choosing the fix: `correctEntry()` in `src/routes/work-time.routes.js` guards with `assertAndroidMayWriteWorkDay(client, req, entry.work_day_uuid, …)` — the **stored** parent — and scopes its overlap check, audit and recalc to `entry.work_day_uuid` as well. Its UPDATE never touches `work_day_uuid`, and entries are only ever created server-side (`start-day`, `change-status`) with a server-resolved parent. So no dedicated contract permits reparenting an existing entry.
+- Fix in `src/routes/sync.routes.js`, narrow and mirroring that contract:
+  - Extracted `loadOwnedWorkDay()` (single owner-scoped work-day lookup, reused by both call sites).
+  - Added `assertExistingEntryUnlocked()`: for an existing `work_time_entries` row it resolves `existing.work_day_uuid`, rejects `WORK_DAY_LOCKED` if that stored parent is approved/admin-corrected, and rejects `WORK_DAY_REPARENT_NOT_SUPPORTED` if the incoming record points at a different parent. The stored relationship is now authoritative; the incoming relation is still validated separately in `assertOwnedRelations` (which is what covers newly created entries).
+- Added 4 focused regression tests (12 total in `tests/sync-domain-invariant.test.js`): omitted-parent, reparent-out-of-locked-day, reparent-between-two-open-days (isolating the new error code), and a positive test proving a legitimate entry under an open work day can still be updated. The three negative tests were each confirmed to fail against `05f356a` and pass after the fix.
+- TD-004 was **not** fully closed at `05f356a`; it is claimed closed only as of this checkpoint, now that the regression is covered.
+
+## Previous tours/stops checkpoint
+
+- Date: 2026-09-06.
+- Branch: `claude/sync-domain-invariant-audit`.
+- Objective: resolve the two TD-004 items left open by the previous checkpoint (`tours.tour_status`/`is_closed`, `stops.stop_status`/`is_completed`) by tracing actual current Android source, not by inferring compatibility risk from documentation.
+
+## What changed in this checkpoint
+
+- Traced every Android call site that can write `tour_status`/`is_closed`/`stop_status`/`is_completed` and every call site of `DeltaSyncEngine` (the client for generic `/api/sync`):
+  - `DeltaSyncEngine.sync()` is called from exactly one place, `DashboardViewModel.syncWithBackend()`, and only ever with `work_times` as the payload key. No Kotlin source anywhere constructs a `pendingChanges` map containing `tours`, `stops`, `hotels`, `cargo`, `costs`, `drivers`, `devices`, `work_days`, or `work_time_entries`.
+  - Tour/stop lifecycle sync (`ToursViewModel.syncToursWithBackend()`, `DashboardViewModel.syncTours()`, `markStopArrived`/`markStopCompleted`/`arriveStop`/`completeStop`) exclusively calls `backendApi.syncTours(driverName, toursWithStops)` — the separate legacy `POST /api/sync-tours/:driverName` route (`ImportEngine.processTour`) — never the generic sync engine.
+  - `ImportEngine.processTour`'s mobile-sync branch (`isMobileSync`) already skips the `tours` UPDATE entirely for existing tours (so mobile can't overwrite `is_closed`/`tour_status` on an existing tour through that route either) and applies a monotonic merge for stops (`is_completed` only `false→true`; `stop_status` locked once `COMPLETED`/`SKIPPED`). It does **not**, however, re-check cargo-pickup/delivery blocking server-side before accepting a client-supplied `stop_status = COMPLETED` — the client-side check in `ToursViewModel.markStopCompleted()`/`DashboardViewModel.completeStop()` is the only enforcement. This is a real gap, but it is in `sync-tour.routes.js`/`ImportEngine`, not in the generic `/api/sync` route this task (TD-004) covers — flagged below as a new out-of-scope follow-up, not fixed here.
+  - `tours.tour_status` has no write path at all in `ImportEngine` (its INSERT/UPDATE statements never reference that column); it can currently only change through the admin `PATCH /api/tours/:id` (cargo/hotel-completion-blocking enforced) or the backend's own `refreshProgress` logic.
+- **Classification: A (safe to block now) for both remaining items**, with respect to generic `/api/sync` specifically — no current Android behavior, offline or online, depends on pushing these fields through it.
+- Extended `ENTITY_LOCKED_FIELDS` in `src/routes/sync.routes.js` with `tours: ['tour_status', 'is_closed']` and `stops: ['stop_status', 'is_completed']` (same field-stripping pattern already used for `costs`/`hotels`).
+- Added 2 focused regression tests to `tests/sync-domain-invariant.test.js` (8 total in that file now), each confirmed to fail against the pre-fix code and pass after the fix via a temporary revert-and-rerun.
+- New follow-up identified (not fixed here, out of TD-004's generic-sync scope): `POST /api/sync-tours/:driverName` → `ImportEngine.processTour` does not re-verify cargo pickup/delivery blocking server-side before accepting `stop_status = COMPLETED` from a mobile payload; only the Android client checks this today. This is the actual production-reachable version of the "stop completion bypasses cargo blocking" risk, since this is the route the app really uses.
+
+## Previous generic sync domain invariant audit checkpoint
+
+- Date: 2026-09-06.
+- Branch: `claude/sync-domain-invariant-audit`.
+- Objective: audit whether authenticated, owner-scoped generic `/api/sync` writes can bypass a dedicated domain route's business rules (TD-004), and close any confirmed bypass with the narrowest safe guard.
+
+## What changed in this checkpoint
+
+- Built a full inventory of every entity generic `/api/sync` can create/update/delete (`drivers`, `tours`, `stops`, `hotels`, `cargo`, `devices`, `work_times`, `work_days`, `work_time_entries`, `costs`) and compared each against its dedicated route(s) and business-rule engine. Ownership scoping was already closed by the prior generic sync checkpoint; this audit targeted non-ownership invariants (status/lifecycle fields, admin-only creation gates, audit trails, approval locks).
+- Confirmed bypasses, all reachable by a device-authenticated driver acting only within their own owner scope:
+  - `costs.status` — generic sync could set a cost's approval/payment status directly, bypassing the admin-only `/admin/update-cost-status` allow-list. The legacy mobile cost-sync endpoint already blocks this same write; the generic path did not.
+  - `cargo` (all writes) — cargo has no mobile creation endpoint at all (creation is `requireAdmin`-only), yet generic sync let a driver create arbitrary cargo rows in their own tour. Existing cargo could also have `status`/`deleted_at` set directly, bypassing `ADMIN_STATUS_TRANSITIONS`, the terminal-state override requirement, the "cannot delete cargo already in transit" rule, the duplicate-serial check, and the entire `cargo_events` audit trail.
+  - `hotels.status` / `hotels.deleted_at` — generic sync could set hotel status directly, bypassing `HotelEngine.transitionHotelStatus`'s terminal-state protection (`CHECKED_OUT`/`CANCELLED` require an override reason) and `hotel_events` audit logging, and could soft-delete a hotel even though mobile has no dedicated hotel-delete endpoint.
+  - `work_days` / `work_time_entries` — generic sync could still upsert a work day the admin already approved (or an entry under one), bypassing the `APPROVED_RECORD_LOCKED` / `ADMIN_CORRECTED_RECORD_LOCKED` guard the dedicated correction endpoint enforces.
+- Fixes applied in `src/routes/sync.routes.js`, all narrow field/entity guards (no rewrite of the generic sync engine, no duplicated state-machine logic):
+  - `ENTITY_LOCKED_FIELDS`, parallel to the existing `SERVER_ONLY_FIELDS` pattern, strips `costs.status` and `hotels.status`/`hotels.deleted_at` from client-writable fields.
+  - Every `cargo` push is now rejected with `CARGO_SYNC_WRITE_NOT_SUPPORTED`; cargo lifecycle must go through the dedicated admin CRUD and driver transition endpoints. `GET /api/sync` reads are unaffected.
+  - `isWorkDayLocked()` gates writes to a `work_days` row that is `APPROVED` or admin-corrected, and to any `work_time_entries` row whose parent work day is locked (extends the existing work-day-ownership relation query rather than adding a new one), both rejected as `WORK_DAY_LOCKED`.
+- Left open, documented but not implemented (see TD-004): `tours.tour_status`/`is_closed` can still bypass the cargo/hotel completion-blocking check in `PATCH /api/tours/:id`, and `stops.stop_status`/`is_completed` can still bypass the cargo-blocking check in the dedicated stop-complete endpoint. Both were left unfixed because blocking either field risks breaking a legitimate offline-first mobile completion flow that could not be confirmed or ruled out from backend source alone.
+- Added `tests/sync-domain-invariant.test.js` (6 tests). Each was confirmed to fail against the pre-fix code and pass after the fix via a temporary revert-and-rerun, not just written and assumed to be correct.
+
+## Previous admin write authorization checkpoint
+
+- Date: 2026-09-06.
 - Branch: `codex/admin-write-authorization-closure`.
 - Objective: close every remaining READ_ONLY authorization gap on unsafe routes authenticated with `requireAdmin`.
 
