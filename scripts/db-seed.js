@@ -1,9 +1,9 @@
 process.env.NODE_ENV = process.env.NODE_ENV || 'development';
 process.env.DATABASE_URL = process.env.DATABASE_URL || require('../src/config/env').DATABASE_URL;
 
-const initDb = require('../src/database/init');
 const pool = require('../src/database/pool');
 const crypto = require('node:crypto');
+const { verifyMigrations } = require('../src/database/migration-runtime');
 
 const LOCAL_DATABASE_RE = /@(localhost|127\.0\.0\.1|host\.docker\.internal):|\/\/[^@/]+@postgres:/i;
 
@@ -330,9 +330,9 @@ async function upsertWorkTimeSeeds(client, companyUuid, drivers, tours) {
 
 (async () => {
     assertSafeSeedTarget();
-    await initDb();
     const client = await pool.connect();
     try {
+        await verifyMigrations(client);
         await client.query('BEGIN');
         const companyUuid = await upsertCompany(client);
         const drivers = await upsertDrivers(client, companyUuid);

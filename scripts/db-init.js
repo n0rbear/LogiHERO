@@ -1,17 +1,18 @@
 process.env.NODE_ENV = process.env.NODE_ENV || 'development';
-process.env.DATABASE_URL = process.env.DATABASE_URL || require('../src/config/env').DATABASE_URL;
 
-const initDb = require('../src/database/init');
 const pool = require('../src/database/pool');
+const { migrate } = require('../src/database/migration-runtime');
 
 (async () => {
+    const client = await pool.connect();
     try {
-        await initDb();
-        console.log('[DB] init complete');
+        const result = await migrate(client);
+        console.log(`[DB] migration head ready: ${result.state.head}`);
     } finally {
+        client.release();
         await pool.end();
     }
 })().catch((error) => {
-    console.error('[DB] init failed:', error.message);
+    console.error(`[DB] migration failed: ${error.code || 'FAILED'}: ${error.message}`);
     process.exit(1);
 });
