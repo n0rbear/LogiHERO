@@ -255,6 +255,84 @@ test('TD-010 legacy tour sync owner scope (real PostgreSQL)', async (t) => {
         }
     });
 
+    // The deleted-tour branch takes its own path through the route, so it needs its own proof
+    // that it follows the same ownership rule rather than the driver_name match it used to.
+    await t.test('delete path: a foreign tour and its stops cannot be deleted', async () => {
+        await cleanup();
+        const fixture = await seed({ ownerUuid: B_UUID, ownerName: B_NAME, ownerCompany: COMPANY_1 });
+        try {
+            const res = await post(app, `/api/sync-tours/${encodeURIComponent(A_NAME)}`, [{
+                tour: { uuid: fixture.tour.uuid, name: 'TD010 Tour', deletedAt: Date.now(), updated_at: 200 }
+            }]);
+            assert.equal(res.status, 200, res.text);
+            const tour = await pool.query('SELECT deleted_at FROM tours WHERE id = $1', [fixture.tour.id]);
+            assert.equal(tour.rows[0].deleted_at, null, 'a foreign tour must not be deleted');
+            const stop = await pool.query('SELECT deleted_at FROM stops WHERE id = $1', [fixture.stop.id]);
+            assert.equal(stop.rows[0].deleted_at, null, 'a foreign tour\'s stops must not be deleted');
+        } finally {
+            await cleanup();
+        }
+    });
+
+    await t.test('delete path: a stale driver_name cannot delete a tour owned by someone else', async () => {
+        // tours.driver_name is a denormalized copy. If a tour is reassigned (or a driver
+        // renamed) so that driver_uuid says B while driver_name still reads A, the old
+        // name-only delete matched and let A delete B's tour. Ownership now comes from the
+        // UUID, and the name is only consulted for rows that have no driver_uuid at all.
+        await cleanup();
+        await pool.query("INSERT INTO drivers (uuid, company_uuid, name, is_active) VALUES ($1,$2,$3,true)", [A_UUID, COMPANY_1, A_NAME]);
+        await pool.query("INSERT INTO drivers (uuid, company_uuid, name, is_active) VALUES ($1,$2,$3,true)", [B_UUID, COMPANY_1, B_NAME]);
+        await pool.query("INSERT INTO driver_devices (driver_uuid, device_id, device_token_hash, is_active) VALUES ($1,$2,$3,true)", [A_UUID, DEVICE_A, hashToken(TOKEN_A)]);
+        const tour = await pool.query(
+            "INSERT INTO tours (driver_uuid, driver_name, company_uuid, name, updated_at) VALUES ($1,$2,$3,'TD010 Tour',100) RETURNING id, uuid",
+            [B_UUID, A_NAME, COMPANY_1]
+        );
+        try {
+            const res = await post(app, `/api/sync-tours/${encodeURIComponent(A_NAME)}`, [{
+                tour: { uuid: tour.rows[0].uuid, name: 'TD010 Tour', deletedAt: Date.now(), updated_at: 200 }
+            }]);
+            assert.equal(res.status, 200, res.text);
+            const after = await pool.query('SELECT deleted_at FROM tours WHERE id = $1', [tour.rows[0].id]);
+            assert.equal(after.rows[0].deleted_at, null, 'a stale driver_name must not grant delete rights');
+        } finally {
+            await cleanup();
+        }
+    });
+
+    await t.test('delete path: cross-company deletion is refused', async () => {
+        await cleanup();
+        const fixture = await seed({ ownerUuid: C_UUID, ownerName: C_NAME, ownerCompany: COMPANY_2 });
+        try {
+            await post(app, `/api/sync-tours/${encodeURIComponent(A_NAME)}`, [{
+                tour: { uuid: fixture.tour.uuid, name: 'TD010 Tour', deletedAt: Date.now(), updated_at: 200 }
+            }]);
+            const tour = await pool.query('SELECT deleted_at FROM tours WHERE id = $1', [fixture.tour.id]);
+            assert.equal(tour.rows[0].deleted_at, null, 'cross-company deletion must be refused');
+        } finally {
+            await cleanup();
+        }
+    });
+
+    await t.test('delete path: the owner can still delete a legacy NULL driver_uuid tour', async () => {
+        await cleanup();
+        await pool.query("INSERT INTO drivers (uuid, company_uuid, name, is_active) VALUES ($1,$2,$3,true)", [A_UUID, COMPANY_1, A_NAME]);
+        await pool.query("INSERT INTO driver_devices (driver_uuid, device_id, device_token_hash, is_active) VALUES ($1,$2,$3,true)", [A_UUID, DEVICE_A, hashToken(TOKEN_A)]);
+        const tour = await pool.query("INSERT INTO tours (driver_name, name, updated_at) VALUES ($1,'TD010 Tour',100) RETURNING id, uuid", [A_NAME]);
+        const stop = await pool.query("INSERT INTO stops (tour_id, address, recipient, order_index, stop_status, is_completed, updated_at) VALUES ($1,'TD010 Addr','TD010 Recipient',0,'PENDING',false,100) RETURNING id", [tour.rows[0].id]);
+        try {
+            const res = await post(app, `/api/sync-tours/${encodeURIComponent(A_NAME)}`, [{
+                tour: { uuid: tour.rows[0].uuid, name: 'TD010 Tour', deletedAt: Date.now(), updated_at: 200 }
+            }]);
+            assert.equal(res.status, 200, res.text);
+            const after = await pool.query('SELECT deleted_at FROM tours WHERE id = $1', [tour.rows[0].id]);
+            assert.notEqual(after.rows[0].deleted_at, null, 'the named owner of a legacy tour must still be able to delete it');
+            const afterStop = await pool.query('SELECT deleted_at FROM stops WHERE id = $1', [stop.rows[0].id]);
+            assert.notEqual(afterStop.rows[0].deleted_at, null, 'its stops must be soft-deleted too');
+        } finally {
+            await cleanup();
+        }
+    });
+
     await t.test('legacy tour with NULL driver_uuid still syncs for the named owner', async () => {
         // Tours created by earlier mobile syncs carry driver_name only; scoping must not
         // strand them.

@@ -16,6 +16,8 @@
 - Foreign tours are skipped silently with a 200, so the route gives no existence oracle; the refusal is logged server-side with the tour id only.
 - The admin/import caller passes no `owner` and is unchanged.
 - Two test-harness gaps were fixed along the way: the mocked cargo suites matched the tour lookup by its old literal SQL and their fake tour rows carried no ownership columns, so they broke once the query changed shape. Both now model rows that genuinely belong to the authenticated driver.
+- Final pre-merge review added two things. The stop-revert inside the cargo-blocking guard updated a stop by uuid alone — not reachable with a foreign uuid, since the uuid can only come from the tour's own stop map, but now scoped by `tour_id` too so the write does not rely on that upstream invariant. And the delete path gained coverage, including the case that actually separates the new rule from the old: `tours.driver_name` is a denormalized copy, so a tour reassigned to B while its `driver_name` still reads A used to be deletable by A, and is now refused.
+- Worth knowing for future reviews: three of the delete-path cases pass against pre-fix code as well, because the old name-only match already blocked them. They are regression guards, not proof of a fix; only the stale-`driver_name` case demonstrates the delete change.
 
 ## Previous TD-009 checkpoint (merged as main `e7fe81b`, PR #5)
 

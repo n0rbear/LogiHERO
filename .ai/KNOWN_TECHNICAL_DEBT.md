@@ -68,7 +68,7 @@ Recent production verification showed `/version` had the deployed commit, while 
 
 Some integration checks may skip when local PostgreSQL is unavailable. Never count those skips as database PASS.
 
-### TD-010 - Legacy tour sync resolved the tour by client-supplied UUID without owner scope — FIXED, pending merge
+### TD-010 - Legacy tour sync resolved the tour by client-supplied UUID without owner scope — CLOSED in PR #6
 
 Found during the final pre-merge review of PR #5 (2026-09-06) and **reproduced against real PostgreSQL**. `ImportEngine.processTour` resolves the tour with `SELECT id, updated_at FROM tours WHERE uuid = $1` and no driver/company scope. The route only checks that the path `driverName` matches the authenticated driver; the tour named in the body is never checked against that driver. A driver who knows another driver's tour UUID can therefore have their payload applied against that tour: in the probe, Driver A transitioned Driver B's cargo from `READY_FOR_PICKUP` to `PICKED_UP`. Note the tour's own `driver_name` was not taken over, and the sibling delete path in `sync-tour.routes.js` does scope correctly with `AND driver_name = $3` — it is specifically the `processTour` lookup that is unscoped.
 
@@ -76,7 +76,7 @@ This is **pre-existing and not introduced by PR #5**: the lookup line is untouch
 
 Exploitability: requires knowing a v4 tour UUID, which is not enumerable, so this is an IDOR-style gap rather than a broadly reachable one. Stops in the payload are also applied against the foreign tour.
 
-Status (2026-09-06): **fixed on branch `claude/legacy-tour-sync-owner-scope`, not yet merged.** Re-reproduced independently against merged main `e7fe81b` before any change, driving the real route with real device authentication against real PostgreSQL. Three distinct attacks were confirmed, plus one sibling variant the earlier note had not identified:
+Status: **fixed in PR #6** (branch `claude/legacy-tour-sync-owner-scope`). Re-reproduced independently against merged main `e7fe81b` before any change, driving the real route with real device authentication against real PostgreSQL. Three distinct attacks were confirmed, plus one sibling variant the earlier note had not identified:
 
 - **Foreign tour cargo mutation** — knowing only the foreign tour UUID plus the cargo UUID, Driver A transitioned Driver B's cargo.
 - **Foreign stop mutation** — with the foreign tour UUID plus the stop UUID, Driver A advanced Driver B's stop lifecycle.
@@ -91,7 +91,9 @@ Android compatibility: Android does legitimately create tours (`ToursViewModel.a
 
 Error semantics: a foreign tour is skipped silently and the sync still returns 200, so a foreign UUID is indistinguishable from an unknown one and the route gives no existence oracle. The refusal is recorded server-side with the tour id only — no driver, name or company information is returned to the client.
 
-Remaining evidence: `tests/legacy-tour-sync-owner-scope.integration.test.js` (10 cases, real PostgreSQL) covers all four attacks, same-company and cross-company refusal, the child-boundary escape, own-tour sync, mobile tour creation with server-derived ownership, and the legacy NULL-`driver_uuid` tour. Every negative was confirmed to fail against `e7fe81b` first. **No production smoke was performed and none of this is verified against production data.**
+The final pre-merge review added two things. The stop-revert used by the cargo-blocking guard updated a stop by uuid alone; it was not reachable with a foreign uuid (the uuid can only come from the tour's own stop map) but is now scoped by `tour_id` as well, so the write no longer depends on that upstream invariant holding. And the delete path gained the coverage it lacked — including the case that actually distinguishes the new rule from the old one: `tours.driver_name` is a denormalized copy, so a tour reassigned such that `driver_uuid` says B while `driver_name` still reads A used to be deletable by A under the old name-only match, and is now refused.
+
+Remaining evidence: `tests/legacy-tour-sync-owner-scope.integration.test.js` (14 cases, real PostgreSQL) covers all four attacks, same-company and cross-company refusal, the child-boundary escape, own-tour sync, mobile tour creation with server-derived ownership, the legacy NULL-`driver_uuid` tour, and four delete-path cases. Every negative was confirmed to fail against `e7fe81b` first, except the three delete-path cases that the pre-existing name match already blocked — those are regression guards rather than proof of a fix, and the stale-`driver_name` case is the one that proves the delete change. **No production smoke was performed and none of this is verified against production data.**
 
 ## Medium
 

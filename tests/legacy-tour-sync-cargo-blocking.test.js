@@ -105,10 +105,14 @@ function createApp({ cargo = [] } = {}) {
 
         // Revert of a refused completion (the fix).
         if (sql.includes('UPDATE stops SET') && sql.includes('stop_status')) {
-            const target = db.stops.find(s => String(s.uuid) === String(params[params.length - 1]));
+            // Mirrors the real statement: uuid is $4 and the tour scope, when present, is $5.
+            const [status, isCompleted, , uuid, tourId] = params;
+            const scopesTour = sql.includes('tour_id = $5');
+            const target = db.stops.find(s => String(s.uuid) === String(uuid)
+                && (!scopesTour || s.tour_id === tourId));
             if (target) {
-                target.stop_status = params[0];
-                target.is_completed = !!params[1];
+                target.stop_status = status;
+                target.is_completed = !!isCompleted;
             }
             return { rows: [], rowCount: target ? 1 : 0 };
         }

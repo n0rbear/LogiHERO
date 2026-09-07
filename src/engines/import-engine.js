@@ -336,9 +336,12 @@ async function refuseCargoBlockedCompletions(client, tourId, groupedStops, prior
         const blocking = await checkCargoBlocking(client, tourId, Number(stopId));
         if (blocking.length === 0) continue;
 
+        // Scoped to the authorized tour as well as the uuid: the uuid can only have come from
+        // this tour's own stop map, and stating that here keeps the write from depending on
+        // that upstream invariant staying true.
         await client.query(
-            'UPDATE stops SET stop_status = $1, is_completed = $2, updated_at = $3 WHERE uuid::text = $4',
-            [candidate.prior?.stop_status || 'PENDING', Boolean(candidate.prior?.is_completed), Date.now(), candidate.uuid]
+            'UPDATE stops SET stop_status = $1, is_completed = $2, updated_at = $3 WHERE uuid::text = $4 AND tour_id = $5',
+            [candidate.prior?.stop_status || 'PENDING', Boolean(candidate.prior?.is_completed), Date.now(), candidate.uuid, tourId]
         );
         console.warn(`[CARGO] Refused stop completion via mobile sync: tour=${tourId} stop=${stopId} blocking=${blocking.length}`);
         const ndp = require('../integrations/ndp-client');
