@@ -62,7 +62,8 @@ function createApp({ cargo = [] } = {}) {
     clearProjectModules();
     const pool = require('../src/database/pool');
     const db = {
-        tours: [{ id: TOUR_ID, uuid: TOUR_UUID, updated_at: 100 }],
+        // Owned by the authenticated driver, as a real row would be.
+        tours: [{ id: TOUR_ID, uuid: TOUR_UUID, updated_at: 100, driver_uuid: DRIVER_A_UUID, driver_name: 'Driver A', company_uuid: null }],
         stops: [
             { id: PICKUP_STOP_ID, uuid: PICKUP_STOP_UUID, tour_id: TOUR_ID, stop_status: 'PENDING', is_completed: false, order_index: 0 },
             { id: OTHER_STOP_ID, uuid: OTHER_STOP_UUID, tour_id: TOUR_ID, stop_status: 'PENDING', is_completed: false, order_index: 1 }
@@ -88,7 +89,7 @@ function createApp({ cargo = [] } = {}) {
     async function clientQuery(sql, params = []) {
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 };
 
-        if (sql.includes('SELECT id, updated_at FROM tours WHERE uuid')) {
+        if (sql.startsWith('SELECT') && sql.includes('FROM tours WHERE uuid')) {
             const row = db.tours.find(t => t.uuid === params[0]);
             return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 };
         }
@@ -111,10 +112,14 @@ function createApp({ cargo = [] } = {}) {
         }
 
         if (sql.includes('UPDATE stops SET') && sql.includes('stop_status')) {
-            const target = db.stops.find(s => String(s.uuid) === String(params[params.length - 1]));
+            // Mirrors the real statement: uuid is $4 and the tour scope, when present, is $5.
+            const [status, isCompleted, , uuid, tourId] = params;
+            const scopesTour = sql.includes('tour_id = $5');
+            const target = db.stops.find(s => String(s.uuid) === String(uuid)
+                && (!scopesTour || s.tour_id === tourId));
             if (target) {
-                target.stop_status = params[0];
-                target.is_completed = !!params[1];
+                target.stop_status = status;
+                target.is_completed = !!isCompleted;
             }
             return { rows: [], rowCount: target ? 1 : 0 };
         }

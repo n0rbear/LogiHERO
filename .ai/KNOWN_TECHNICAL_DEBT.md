@@ -68,7 +68,7 @@ Recent production verification showed `/version` had the deployed commit, while 
 
 Some integration checks may skip when local PostgreSQL is unavailable. Never count those skips as database PASS.
 
-### TD-010 - Legacy tour sync resolves the tour by client-supplied UUID without owner scope
+### TD-010 - Legacy tour sync resolved the tour by client-supplied UUID without owner scope — CLOSED in PR #6
 
 Found during the final pre-merge review of PR #5 (2026-09-06) and **reproduced against real PostgreSQL**. `ImportEngine.processTour` resolves the tour with `SELECT id, updated_at FROM tours WHERE uuid = $1` and no driver/company scope. The route only checks that the path `driverName` matches the authenticated driver; the tour named in the body is never checked against that driver. A driver who knows another driver's tour UUID can therefore have their payload applied against that tour: in the probe, Driver A transitioned Driver B's cargo from `READY_FOR_PICKUP` to `PICKED_UP`. Note the tour's own `driver_name` was not taken over, and the sibling delete path in `sync-tour.routes.js` does scope correctly with `AND driver_name = $3` — it is specifically the `processTour` lookup that is unscoped.
 
@@ -76,7 +76,24 @@ This is **pre-existing and not introduced by PR #5**: the lookup line is untouch
 
 Exploitability: requires knowing a v4 tour UUID, which is not enumerable, so this is an IDOR-style gap rather than a broadly reachable one. Stops in the payload are also applied against the foreign tour.
 
-Next evidence needed: scope the `processTour` tour lookup to the authenticated driver/company (or reject a tour whose `driver_name` differs), plus a focused cross-driver regression test on `POST /api/sync-tours/:driverName`. Do this in its own change, not folded into cargo work.
+Status: **fixed in PR #6** (branch `claude/legacy-tour-sync-owner-scope`). Re-reproduced independently against merged main `e7fe81b` before any change, driving the real route with real device authentication against real PostgreSQL. Three distinct attacks were confirmed, plus one sibling variant the earlier note had not identified:
+
+- **Foreign tour cargo mutation** — knowing only the foreign tour UUID plus the cargo UUID, Driver A transitioned Driver B's cargo.
+- **Foreign stop mutation** — with the foreign tour UUID plus the stop UUID, Driver A advanced Driver B's stop lifecycle.
+- **Foreign stop creation** — the foreign tour UUID *alone* was enough to inject a brand-new stop into Driver B's tour; no child identifier was needed.
+- **Child-boundary escape (new)** — even on a tour genuinely owned by the caller, a stop UUID belonging to another tour could be advanced, because the stop upsert conflicted on `uuid` globally without checking the row's `tour_id`. Same root cause: a resource named by identifier was trusted once its parent had been authorized.
+
+Identifier sufficiency: the tour UUID alone grants injection; child UUIDs extend it to mutating existing children. Same-company and different-company callers were both confirmed refused after the fix.
+
+Fix: the mobile route now derives an `owner` from `req.deviceAuth` alone and passes it to `processTour`, which resolves the tour and then refuses it unless `isTourOwnedBy` holds — driver UUID canonical, driver name honoured only for legacy rows with a NULL `driver_uuid`, company scope applied when both sides know their company, mirroring `ensureTourOwned`. The stop upsert gained `stops.tour_id = EXCLUDED.tour_id` so a child cannot escape its authorized parent. The sibling delete path was aligned to the same rule instead of matching on `driver_name` alone. Newly created mobile tours are stamped with the authenticated `driver_uuid`/`company_uuid`, so they are correctly scoped from the start rather than relying on the legacy name fallback.
+
+Android compatibility: Android does legitimately create tours (`ToursViewModel.addTour`, the AI import path), so unknown UUIDs are still created rather than rejected; a payload claiming a different `driver_name` is ignored in favour of the authenticated identity. Legacy tours with a NULL `driver_uuid` remain syncable by the named owner, verified against real PostgreSQL.
+
+Error semantics: a foreign tour is skipped silently and the sync still returns 200, so a foreign UUID is indistinguishable from an unknown one and the route gives no existence oracle. The refusal is recorded server-side with the tour id only — no driver, name or company information is returned to the client.
+
+The final pre-merge review added two things. The stop-revert used by the cargo-blocking guard updated a stop by uuid alone; it was not reachable with a foreign uuid (the uuid can only come from the tour's own stop map) but is now scoped by `tour_id` as well, so the write no longer depends on that upstream invariant holding. And the delete path gained the coverage it lacked — including the case that actually distinguishes the new rule from the old one: `tours.driver_name` is a denormalized copy, so a tour reassigned such that `driver_uuid` says B while `driver_name` still reads A used to be deletable by A under the old name-only match, and is now refused.
+
+Remaining evidence: `tests/legacy-tour-sync-owner-scope.integration.test.js` (14 cases, real PostgreSQL) covers all four attacks, same-company and cross-company refusal, the child-boundary escape, own-tour sync, mobile tour creation with server-derived ownership, the legacy NULL-`driver_uuid` tour, and four delete-path cases. Every negative was confirmed to fail against `e7fe81b` first, except the three delete-path cases that the pre-existing name match already blocked — those are regression guards rather than proof of a fix, and the stale-`driver_name` case is the one that proves the delete change. **No production smoke was performed and none of this is verified against production data.**
 
 ## Medium
 
@@ -90,7 +107,7 @@ Discovered while tracing Android source for the TD-004 follow-up (2026-09-06). A
 
 Risk: a modified client, a client bug, or a direct authenticated API call (bypassing the official app) could mark a stop completed via `/api/sync-tours/:driverName` while cargo pickup/delivery is still pending at that stop, with no server-side check catching it — unlike generic `/api/sync`, this route has real Android traffic today.
 
-Status (2026-09-06): **reproduced and fixed on branch `claude/legacy-tour-sync-cargo-blocking`, not yet merged.** The bypass was reproduced against merged main `6a32d07` for both variants (a pending pickup and a pending delivery at the stop): the sync committed with the stop completed. `checkCargoBlocking` was extracted verbatim into `src/engines/cargo-blocking.js` so the dedicated stop-complete endpoint and the legacy bulk sync share one rule instead of two that can drift, and `ImportEngine.processTour` now refuses a cargo-blocked completion for mobile syncs.
+Status (2026-09-06): **CLOSED — merged to `main` as `e7fe81b` (PR #5).** The bypass was reproduced against merged main `6a32d07` for both variants (a pending pickup and a pending delivery at the stop): the sync committed with the stop completed. `checkCargoBlocking` was extracted verbatim into `src/engines/cargo-lifecycle.js` so the dedicated stop-complete endpoint and the legacy bulk sync share one rule instead of two that can drift, and `ImportEngine.processTour` now refuses a cargo-blocked completion for mobile syncs.
 
 Cargo-blocking semantics confirmed from source: for a given stop, cargo blocks when it is that stop's pickup and its status is `PLANNED`/`READY_FOR_PICKUP`, or when it is that stop's delivery and its status is `PICKED_UP`/`IN_TRANSIT`. `DELIVERED`, `CANCELLED`, `REJECTED`, `DAMAGED` and `MISSING` do not block per-stop completion (`DAMAGED`/`MISSING` block whole-tour completion only). Soft-deleted cargo never blocks.
 

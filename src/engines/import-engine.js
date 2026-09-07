@@ -4,13 +4,29 @@ const { checkCargoBlocking, isLegalDriverTransition } = require('./cargo-lifecyc
 const ImportEngine = {
     async processTour(client, driverName, tourData, stopsData, options = {}) {
         const isMobileSync = options.source === 'mobile';
+        // Server-derived owner, supplied by the mobile route. Absent for admin/import callers,
+        // which are authorized separately and keep their existing behavior.
+        const owner = options.owner || null;
         // UUID alapú keresés, hogy elkerüljük a kliens/szerver ID ütközést
-        const existingRes = await client.query('SELECT id, updated_at FROM tours WHERE uuid = $1', [tourData.uuid]);
-        let tourId = existingRes.rows.length > 0 ? existingRes.rows[0].id : null;
+        const existingRes = await client.query(
+            'SELECT id, updated_at, driver_uuid, driver_name, company_uuid FROM tours WHERE uuid = $1',
+            [tourData.uuid]
+        );
+        const existingTour = existingRes.rows[0] || null;
+
+        // A tour named by the payload is only reachable if it already belongs to the caller.
+        // Refusing here rather than at the query keeps a foreign UUID indistinguishable from an
+        // unknown one for the client, while still not creating a duplicate row for it.
+        if (existingTour && owner && !isTourOwnedBy(existingTour, owner)) {
+            console.warn(`[TOUR] Refused mobile sync for a tour not owned by the authenticated driver: tourId=${existingTour.id}`);
+            return null;
+        }
+
+        let tourId = existingTour ? existingTour.id : null;
 
         const tour = { ...tourData, driver_name: driverName, updated_at: tourData.updated_at || tourData.updatedAt || Date.now() };
         const incomingTourUpdatedAt = Number(tour.updated_at || Date.now());
-        const existingTourUpdatedAt = Number(existingRes.rows[0]?.updated_at || 0);
+        const existingTourUpdatedAt = Number(existingTour?.updated_at || 0);
         const shouldApplyTourPayload = !tourId || incomingTourUpdatedAt >= existingTourUpdatedAt;
         const depot = AddressEngine.normalize(tourData);
         const groupedStops = [];
@@ -47,8 +63,11 @@ const ImportEngine = {
             await client.query(`UPDATE tours SET driver_name=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7, is_current=$8, depot_name=$9, depot_company=$10, depot_street=$11, depot_house_number=$12, depot_postal_code=$13, depot_city=$14, depot_state=$15, depot_country=$16, depot_address_full=$17, depot_lat=$18, depot_lng=$19, updated_at=$20, deleted_at=$22 WHERE id=$21`,
                 [driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId, tour.deleted_at || tour.deletedAt || null]);
         } else if (!tourId) {
-            const res = await client.query(`INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full, depot_lat, depot_lng, updated_at, deleted_at) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id, uuid`,
-                [tour.uuid || null, driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tour.deleted_at || tour.deletedAt || null]);
+            // Android legitimately creates tours locally (manual add and AI import), so an
+            // unknown UUID is still created — but stamped with the authenticated owner rather
+            // than anything the payload claims, so it is scoped correctly from the start.
+            const res = await client.query(`INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full, depot_lat, depot_lng, updated_at, deleted_at, driver_uuid, company_uuid) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::uuid, $24::uuid) RETURNING id, uuid`,
+                [tour.uuid || null, driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tour.deleted_at || tour.deletedAt || null, owner?.driverUuid || null, owner?.companyUuid || null]);
             tourId = res.rows[0].id;
             if (!tour.uuid) tour.uuid = res.rows[0].uuid;
         }
@@ -79,7 +98,9 @@ const ImportEngine = {
                    END,
                    arrival_time=COALESCE(EXCLUDED.arrival_time, stops.arrival_time),
                    actual_departure_time=COALESCE(EXCLUDED.actual_departure_time, stops.actual_departure_time),
-                   photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), stop_type=EXCLUDED.stop_type, room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number, notes=EXCLUDED.notes, updated_at=GREATEST(COALESCE(stops.updated_at, 0), COALESCE(EXCLUDED.updated_at, 0)) WHERE stops.updated_at IS NULL OR EXCLUDED.updated_at >= stops.updated_at OR EXCLUDED.is_completed = true`
+                   photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), stop_type=EXCLUDED.stop_type, room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number, notes=EXCLUDED.notes, updated_at=GREATEST(COALESCE(stops.updated_at, 0), COALESCE(EXCLUDED.updated_at, 0))
+                   WHERE stops.tour_id = EXCLUDED.tour_id
+                     AND (stops.updated_at IS NULL OR EXCLUDED.updated_at >= stops.updated_at OR EXCLUDED.is_completed = true)`
                 : `tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, stop_date=EXCLUDED.stop_date, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, stop_status=EXCLUDED.stop_status, arrival_time=EXCLUDED.arrival_time, actual_departure_time=EXCLUDED.actual_departure_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items, photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number, deleted_at=NULL WHERE stops.updated_at IS NULL OR EXCLUDED.updated_at >= stops.updated_at`;
             const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, stop_date, notes, order_index, latitude, longitude, is_completed, stop_status, arrival_time, actual_departure_time, stop_type, updated_at, items, photo_url, room_number, entry_code, booking_number) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32) ON CONFLICT (uuid) DO UPDATE SET ${stopConflictUpdate} RETURNING uuid`,
                 [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.stop_date, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.stop_status, main.arrival_time, main.actual_departure_time, main.stop_type, main.updated_at, JSON.stringify(s.items), main.photo_url || main.photoUrl || null, main.room_number, main.entry_code, main.booking_number]);
@@ -196,6 +217,20 @@ function isCompletedState(status, isCompleted) {
     return Boolean(isCompleted) || ['COMPLETED', 'SKIPPED'].includes(status);
 }
 
+const sameId = (a, b) => Boolean(a) && Boolean(b) && String(a).toLowerCase() === String(b).toLowerCase();
+
+// Mirrors ensureTourOwned, which every other mobile tour read already uses: driver UUID is the
+// canonical owner, the driver name is honoured only for legacy rows written before driver_uuid
+// existed, and company scope applies whenever both sides know their company.
+function isTourOwnedBy(tourRow, owner) {
+    const ownedByUuid = sameId(tourRow.driver_uuid, owner.driverUuid);
+    const ownedByLegacyName = !tourRow.driver_uuid && Boolean(tourRow.driver_name)
+        && tourRow.driver_name === owner.driverName;
+    if (!ownedByUuid && !ownedByLegacyName) return false;
+    if (owner.companyUuid && tourRow.company_uuid && !sameId(tourRow.company_uuid, owner.companyUuid)) return false;
+    return true;
+}
+
 // Only live cargo already on this tour is addressable from a mobile payload, so a payload
 // cannot reach a row belonging to another tour by naming its UUID, and cannot act on a
 // deleted row — the dedicated transition route likewise resolves cargo with deleted_at IS NULL.
@@ -301,9 +336,12 @@ async function refuseCargoBlockedCompletions(client, tourId, groupedStops, prior
         const blocking = await checkCargoBlocking(client, tourId, Number(stopId));
         if (blocking.length === 0) continue;
 
+        // Scoped to the authorized tour as well as the uuid: the uuid can only have come from
+        // this tour's own stop map, and stating that here keeps the write from depending on
+        // that upstream invariant staying true.
         await client.query(
-            'UPDATE stops SET stop_status = $1, is_completed = $2, updated_at = $3 WHERE uuid::text = $4',
-            [candidate.prior?.stop_status || 'PENDING', Boolean(candidate.prior?.is_completed), Date.now(), candidate.uuid]
+            'UPDATE stops SET stop_status = $1, is_completed = $2, updated_at = $3 WHERE uuid::text = $4 AND tour_id = $5',
+            [candidate.prior?.stop_status || 'PENDING', Boolean(candidate.prior?.is_completed), Date.now(), candidate.uuid, tourId]
         );
         console.warn(`[CARGO] Refused stop completion via mobile sync: tour=${tourId} stop=${stopId} blocking=${blocking.length}`);
         const ndp = require('../integrations/ndp-client');
