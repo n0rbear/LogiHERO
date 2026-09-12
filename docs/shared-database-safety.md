@@ -42,7 +42,7 @@ The application still has legacy lookup paths that depend on globally unique `dr
 
 - `drivers.name` is globally unique, not scoped by company.
 - Many reads and writes still use `driver_name` without requiring `company_uuid`.
-- `initDb()` runs automatically at server startup and performs `CREATE TABLE IF NOT EXISTS`, conditional `ALTER TABLE`, default demo company creation, and backfill `UPDATE` statements for missing tenant fields.
+- Schema changes now require the explicit versioned migration command; normal server startup performs read-only migration and schema verification.
 - `/admin/delete-driver` hard-deletes a driver by UUID.
 - `/admin/delete-tour` and hotel delete endpoints can remove or soft-delete records without a separate tenant boundary beyond the selected record.
 - `/admin/dev-reset-database` deletes all rows from core tables if called in a non-deployed environment with the confirm phrase.
@@ -78,19 +78,15 @@ The application still has legacy lookup paths that depend on globally unique `dr
 - force-push without explicit approval
 - application ID/package migration without a release plan
 
-## Startup Migration Risk
+## Versioned Migration Safety
 
-`src/database/init.js` is not destructive, but it is still an automatic startup schema tool. It can add columns, constraints, a default demo company, default role permissions, and backfill missing tenant fields.
-
-Safe short-term rule:
-
-- Allow startup schema checks only after reviewing the exact target database and taking a backup.
-
-Safer later direction:
-
-- Replace startup schema changes with reviewed migration files.
-- Add a `RUN_SCHEMA_MIGRATIONS=true` deployment flag before any schema-changing startup code runs.
-- Split tenant backfills into explicit one-time migration scripts with dry-run output.
+- `npm run db:migrate` is the only supported schema-writing runtime.
+- Normal server startup and `/ready` verify the migration head, checksums, and canonical schema without changing data or schema.
+- Migrations use a PostgreSQL advisory lock and one transaction per migration.
+- Legacy ownership backfills fail closed unless driver/company relationships can be resolved deterministically.
+- The migration series does not create Demo Company or role-permission seed rows.
+- Local backup/restore tooling is restricted to localhost, and restore additionally requires a newly created database named with the `logihero_restore_` prefix.
+- Production migration, backup, restore, and `DATABASE_URL` cutover remain separate explicitly authorized operations.
 
 ## Future Separation Options
 

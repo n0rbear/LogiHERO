@@ -2,6 +2,31 @@
 
 ## Current checkpoint
 
+- Date: 2026-09-07.
+- Branch: `claude/versioned-migration-runtime` (branched from merged main `dd22107`).
+- Objective: recover the preserved TD-005 migration-runtime WIP, rebuild it on current main, and prove it against real PostgreSQL.
+
+## What changed in this checkpoint
+
+- The TD-005 work existed only as ~30 uncommitted entries in a local checkout based on `7c8f67e`, which predates PRs #4, #5 and #6. It was preserved before anything else: a binary-safe patch of the 19 modified tracked files plus the `init.js` deletion, and byte-exact raw copies of all 19 modified and 10 untracked files, under `LogiHERO-td005-wip-backup-20260907/`. Both were verified by reconstructing the tree in a scratch worktree and byte-comparing; the patch reproduces every file's content (differing only in line endings, which git rewrites on checkout), and the raw copies are byte-identical. The original checkout was never modified.
+- The WIP applied onto current main almost cleanly, because `src/database/init.js` is byte-identical between `7c8f67e` and `dd22107` and PRs #4/#5/#6 introduced no schema changes. Only `package.json` needed a hand-merge (the WIP's migration scripts alongside main's three-file `test:integration`). The WIP's `.ai` edits were discarded rather than replayed, since main's docs have moved on considerably.
+- The WIP was **not** working. Four genuine defects were found by running it, all of which would have made it unusable:
+  - `array_agg(attname)` returns `name[]`, which node-postgres has no parser for, so it arrived as the string `"{uuid}"` instead of an array. Every unique-constraint comparison therefore failed, in both the validator and migration 005. Fixed by casting to `text`.
+  - `normalizeDefault` did not strip a schema qualifier, so the contract's `gen_random_uuid()` never matched PostgreSQL's reported `public.gen_random_uuid()` and every uuid default looked mismatched.
+  - The contract disagreed with the schema `init.js` actually creates: `live_updates.speed`, `next_stop_dist` and `tour_remaining_dist` are `FLOAT` (double precision) and `tours.date` is `BIGINT`. The contract claimed `REAL` and `TEXT`. A contract that disagrees with real column types blocks every existing database from upgrading, which is exactly what happened.
+  - The WIP's own tests encoded the same wrong `tours.date` belief — the legacy fixture created it as `TEXT` and used `BIGINT` as its drift case. Both were corrected to match `init.js`, and a unit test now pins the real types.
+- Proven against real PostgreSQL, not described: clean database bootstraps to head; a legacy production-shaped database upgrades forward; **the real development database created by `init.js` over the project's history (149 drivers of accumulated data) migrated cleanly to `006_validate_schema`**; a repeat run applies nothing; a failing migration rolls back and is not recorded; concurrent runners serialize on the advisory lock; checksum drift, unknown ledger rows, gaps and schema drift all fail closed.
+- That real-database upgrade also surfaced the intended operator-decision case: migration 003 refused to backfill ownership because the database had one driver with no company and two companies to choose from. It aborted rather than guessing, which is the designed behavior.
+- E2E now runs through the new path (`db:init` runs migrations, `db:seed`, then a server that verifies on boot) and passes 4/4 in real Chromium.
+
+## What TD-005 changes
+
+- `src/database/init.js` is deleted. Startup no longer creates, alters, backfills or seeds anything; `server.js` calls `verifyMigrations` and refuses to start on a stale or invalid database, and `/ready` reports the same verification.
+- Schema evolution lives in `src/database/migrations/`: `001` is the immutable baseline marker already on main, `002`-`006` create the canonical schema, backfill legacy rows behind preconditions, reconcile types and defaults, add constraints and indexes, and validate the contract.
+- Migration is explicit (`npm run db:migrate`), never automatic on boot, so multiple instances cannot race a schema change during deploy.
+
+## Previous TD-010 checkpoint (merged as main `dd22107`, PR #6)
+
 - Date: 2026-09-06.
 - Branch: `claude/legacy-tour-sync-owner-scope` (branched from merged main `e7fe81b`).
 - Objective: close TD-010 — the legacy mobile tour sync resolving a client-supplied tour UUID without owner scope.

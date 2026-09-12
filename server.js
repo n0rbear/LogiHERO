@@ -1,6 +1,7 @@
 ﻿// FIXED SERVER v18 - ADMIN UX CONSOLIDATION
 const express = require('express');
-const initDb = require('./src/database/init');
+const pool = require('./src/database/pool');
+const { verifyMigrations } = require('./src/database/migration-runtime');
 const { PORT } = require('./src/config/env');
 const setupUploads = require('./src/infrastructure/uploads');
 const healthRoutes = require('./src/routes/health.routes');
@@ -111,14 +112,20 @@ app.use(errorHandler);
 
 const start = async () => {
     try {
-        await initDb();
+        const client = await pool.connect();
+        try {
+            await verifyMigrations(client);
+        } finally {
+            client.release();
+        }
         const server = app.listen(PORT, () => {
             console.log('[STARTUP] LogiHERO server starting on port ' + PORT);
         });
         return server;
     } catch (err) {
-        console.error('[STARTUP] Fatal error during initDb:', err);
-        process.exit(1);
+        console.error(`[STARTUP] Database migration verification failed: ${err.code || 'FAILED'}: ${err.message}`);
+        if (require.main === module) process.exit(1);
+        throw err;
     }
 };
 

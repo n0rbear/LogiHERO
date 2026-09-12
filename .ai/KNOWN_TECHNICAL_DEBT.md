@@ -56,9 +56,17 @@ Risk: low — closed with evidence, not inference. Note the lesson from the `wor
 
 Next evidence needed: none for this route; keep the same generic-vs-dedicated comparison habit for any future `SYNC_TABLES` addition. See TD-009 for the separate, currently-reachable gap this audit surfaced in the *actual* tour/stop sync path Android uses.
 
-### TD-005 - Startup schema mutation remains primary schema owner
+### TD-005 - Startup schema mutation remains primary schema owner — FIXED in PR #7, production cutover NOT done
 
-`src/database/init.js` still creates/alters/backfills schema. Treat it as migration-risk code.
+Original state: `src/database/init.js` created, altered, backfilled and seeded schema on every normal startup, making it the uncontrolled primary schema owner.
+
+Status: versioned forward-only migrations now own schema evolution. `init.js` is deleted; `server.js` and `/ready` call the same read-only `verifyMigrations` and refuse to serve against a stale or invalid database. Migration is explicit (`npm run db:migrate`) and never automatic on boot, so concurrent instances cannot race a schema change during a deploy. The ledger is `public.schema_migrations` (id, filename, description, SHA-256 checksum, applied_at, execution_ms, app_commit); a PostgreSQL advisory lock serializes runners; each migration runs in its own transaction and is recorded in that same transaction, so a failure is neither applied nor recorded. There is deliberately no down migration.
+
+This work was recovered from a local-only WIP branch based on `7c8f67e` and rebuilt on `dd22107`. It did not work as found. Four defects were fixed, each of which alone prevented any existing database from upgrading: `array_agg(attname)` returns `name[]`, which node-postgres leaves as a raw string, so every unique-constraint comparison failed; `normalizeDefault` did not strip the `public.` qualifier PostgreSQL reports on extension functions; and the contract mis-typed four columns relative to what `init.js` actually creates (`tours.date` is `BIGINT`, and `live_updates.speed`/`next_stop_dist`/`tour_remaining_dist` are `FLOAT`, i.e. double precision). The WIP's own tests encoded the same wrong `tours.date` assumption and were corrected; a unit test now pins these types against `init.js` reality.
+
+Evidence, all against real local PostgreSQL: clean database bootstraps to head; a legacy production-shaped database upgrades; **the real development database that `init.js` built up over the project's history migrated cleanly to `006_validate_schema`**; a repeated run applies nothing; a failing migration rolls back and is not recorded; two concurrent runners serialize; checksum drift, unknown ledger rows, sequence gaps and schema drift all fail closed; ledger rows carry checksums and timings. E2E passes 4/4 in real Chromium through the new `db:init` → `db:seed` → verifying-startup path.
+
+Remaining: **no production backup, migration, restore or Render `DATABASE_URL` cutover has been performed, and nothing here is verified against production data.** Migration 003 refuses to backfill ownership when a database has drivers without a company and more than one company to choose from — that is deliberate, and such a database needs an operator decision before it can migrate. See `docs/DATABASE_MIGRATIONS.md` for the deployment sequence.
 
 ### TD-006 - NDP commit correlation is incomplete
 

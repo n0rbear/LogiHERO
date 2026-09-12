@@ -69,14 +69,14 @@ test('health is liveness and ready reports sanitized readiness checks', async ()
     clearProjectModules();
 
     const pool = require('../src/database/pool');
-    pool.query = async (sql) => {
-        if (sql.includes('information_schema.tables')) return { rows: [{ exists: true }] };
-        if (sql.includes('schema_migrations')) return { rows: [{ count: 1 }] };
-        return { rows: [] };
-    };
+    pool.query = async () => ({ rows: [] });
 
     const app = express();
-    app.use(require('../src/routes/health.routes'));
+    const { createHealthRouter } = require('../src/routes/health.routes');
+    app.use(createHealthRouter({
+        db: pool,
+        migrationVerifier: async () => ({ head: '006_validate_schema', applied: ['001', '002', '003', '004', '005', '006'] })
+    }));
 
     const health = await request(app, { path: '/health' });
     assert.equal(health.status, 200);
@@ -89,6 +89,27 @@ test('health is liveness and ready reports sanitized readiness checks', async ()
     assert.equal(body.checks.config.databaseUrl, 'present');
     assert.equal(JSON.stringify(body).includes('secret'), false);
     assert.equal(JSON.stringify(body).includes('admin-token-value'), false);
+});
+
+test('ready fails closed when migration head or checksum verification fails', async () => {
+    process.env.ADMIN_TOKEN = 'admin-token-value';
+    process.env.DATABASE_URL = 'postgresql://user:secret@example/db';
+    clearProjectModules();
+    const app = express();
+    const { createHealthRouter } = require('../src/routes/health.routes');
+    app.use(createHealthRouter({
+        db: { query: async () => ({ rows: [] }) },
+        migrationVerifier: async () => {
+            throw Object.assign(new Error('checksum mismatch'), { code: 'CHECKSUM_MISMATCH' });
+        }
+    }));
+
+    const ready = await request(app, { path: '/ready' });
+    assert.equal(ready.status, 503);
+    const body = JSON.parse(ready.text);
+    assert.equal(body.status, 'DEGRADED');
+    assert.deepEqual(body.checks.migrations, { status: 'error', code: 'CHECKSUM_MISMATCH' });
+    assert.equal(JSON.stringify(body).includes('checksum mismatch'), false);
 });
 
 test('request tracing, admin no-store, x-powered-by removal, and safe 500 body', async () => {
