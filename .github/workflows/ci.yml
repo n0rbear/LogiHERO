@@ -20,7 +20,32 @@ jobs:
   backend:
     name: Backend checks
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    # Mirrors docker-compose.dev.yml, including the 5433 host port, so the same default
+    # connection string works locally and here with no per-environment configuration.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: logihero_dev
+          POSTGRES_USER: logihero_dev
+          POSTGRES_PASSWORD: logihero_dev_password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U logihero_dev -d logihero_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Turns a missing database into a failure instead of a silent skip. Without this a
+      # broken service container would still produce a green run with the database-backed
+      # ownership and migration tests quietly skipped.
+      # DATABASE_URL is deliberately left unset: src/config/env.js already falls back to the
+      # local development connection string, which is exactly what the service container serves.
+      REQUIRE_POSTGRES: '1'
 
     steps:
       - name: Checkout
@@ -35,11 +60,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare test database
+        run: npm run db:migrate
+
       - name: Run Node tests
         run: npm test
 
       - name: Run integration tests
         run: npm run test:integration
+
+      - name: Run migration integration tests
+        run: npm run test:migrations
 
       - name: Run typecheck
         run: npm run typecheck

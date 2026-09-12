@@ -9,7 +9,7 @@ const express = require('express');
 const { Client } = require('pg');
 
 const { assertLocalDatabaseUrl } = require('../src/database/database-inspection');
-const { migrate, verifyMigrations } = require('../src/database/migration-runtime');
+const { legacyMigrationChecksum, loadMigrations, migrate, verifyMigrations } = require('../src/database/migration-runtime');
 const { createHealthRouter } = require('../src/routes/health.routes');
 const { backup } = require('../scripts/db-backup');
 const { restore } = require('../scripts/db-restore');
@@ -148,7 +148,7 @@ test('legacy production-shaped schema upgrades without implicit demo or permissi
             assert.equal(Number((await client.query('SELECT COUNT(*)::int AS count FROM role_permissions')).rows[0].count), 0);
             const baseline = (await client.query("SELECT filename, checksum FROM schema_migrations WHERE id='001_baseline_logihero_schema'")).rows[0];
             assert.equal(baseline.filename, '001_baseline_logihero_schema.js');
-            assert.match(baseline.checksum, /^[a-f0-9]{64}$/);
+            assert.match(baseline.checksum, /^v2:[a-f0-9]{64}$/);
         } finally {
             await client.end();
         }
@@ -308,6 +308,153 @@ test('local LogiHERO-only custom backup restores with matching counts, fingerpri
         await dropDatabase(source.name);
         await dropDatabase(target.name);
         fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+// Copies src/database into a scratch directory so a test can extend schema-contract.js and add a
+// migration without touching the repository. The migrations only require ../schema-contract and
+// ../driver-pwa-schema, so the copied tree is self-contained.
+function sandboxDatabaseSources() {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'logihero-contract-'));
+    fs.cpSync(path.join(__dirname, '..', 'src', 'database'), directory, { recursive: true });
+    return {
+        directory,
+        migrationsDir: path.join(directory, 'migrations'),
+        contractPath: path.join(directory, 'schema-contract.js')
+    };
+}
+
+// Adds a table to the canonical contract and the forward-only migration that creates it, which is
+// the shape every future product-domain schema extension will take.
+function extendContract(sandbox, { table = 'pod_acceptances', id = '008_pod_acceptances' } = {}) {
+    const contract = fs.readFileSync(sandbox.contractPath, 'utf8');
+    const anchor = "    ['drivers', [";
+    assert.ok(contract.includes(anchor), 'schema contract anchor not found');
+    fs.writeFileSync(sandbox.contractPath, contract.replace(
+        anchor,
+        `    ['${table}', [\n        ['uuid', 'UUID DEFAULT gen_random_uuid() PRIMARY KEY'], ['created_at', 'BIGINT']\n    ]],\n${anchor}`
+    ));
+    fs.writeFileSync(path.join(sandbox.migrationsDir, `${id}.js`), [
+        'module.exports = {',
+        `    id: '${id}',`,
+        "    description: 'Create the next product-domain table.',",
+        "    checksumFiles: ['../schema-contract.js'],",
+        '    async up(client) {',
+        `        await client.query('CREATE TABLE ${table} (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, created_at BIGINT)');`,
+        '    }',
+        '};',
+        ''
+    ].join('\n'));
+}
+
+const storedChecksums = async (client) => Object.fromEntries(
+    (await client.query('SELECT id, checksum FROM schema_migrations ORDER BY id')).rows.map((row) => [row.id, row.checksum])
+);
+
+// Regression guard for the checksum architecture. Before the fix, migration checksums covered the
+// declared dependency files as well, so adding one table to schema-contract.js rewrote the
+// checksum of every applied migration that declared it and migrate() failed with CHECKSUM_MISMATCH
+// before it could apply the new migration at all.
+test('a later schema-contract extension does not invalidate applied migrations', { timeout: 120000 }, async () => {
+    const sandbox = sandboxDatabaseSources();
+    try {
+        await withDatabase(async ({ url }) => {
+            const client = await connected(url);
+            try {
+                const initial = await migrate(client, { migrationsDir: sandbox.migrationsDir });
+                assert.equal(initial.state.head, '007_driver_pwa_auth_foundation');
+                const before = await storedChecksums(client);
+                assert.equal(Object.values(before).every((value) => value.startsWith('v2:')), true);
+
+                extendContract(sandbox);
+
+                // Every previously applied migration keeps the checksum it was stored with.
+                const reloaded = new Map(loadMigrations(sandbox.migrationsDir).map((m) => [m.id, m]));
+                for (const [id, checksum] of Object.entries(before)) {
+                    assert.equal(reloaded.get(id).checksum, checksum, `${id} checksum changed`);
+                }
+
+                const extended = await migrate(client, { migrationsDir: sandbox.migrationsDir, expectedHead: '008_pod_acceptances' });
+                assert.equal(extended.state.head, '008_pod_acceptances');
+                assert.deepEqual(extended.results.filter((item) => item.status === 'applied').map((item) => item.id), ['008_pod_acceptances']);
+                await verifyMigrations(client, { migrationsDir: sandbox.migrationsDir, expectedHead: '008_pod_acceptances' });
+                assert.equal((await client.query("SELECT to_regclass('public.pod_acceptances') AS table")).rows[0].table, 'pod_acceptances');
+            } finally {
+                await client.end();
+            }
+        });
+    } finally {
+        fs.rmSync(sandbox.directory, { recursive: true, force: true });
+    }
+});
+
+// The upgrade path for a database whose rows were written by the previous runtime: the first
+// migrate() rebaselines them in place, after which a contract extension is safe.
+test('checksums from the previous runtime are rebaselined before the next extension', { timeout: 120000 }, async () => {
+    const sandbox = sandboxDatabaseSources();
+    try {
+        await withDatabase(async ({ url }) => {
+            const client = await connected(url);
+            try {
+                await migrate(client, { migrationsDir: sandbox.migrationsDir });
+
+                // Rewrite the metadata exactly as the previous runtime would have stored it.
+                for (const migration of loadMigrations(sandbox.migrationsDir)) {
+                    await client.query('UPDATE schema_migrations SET checksum = $2, dependency_checksum = NULL WHERE id = $1', [
+                        migration.id,
+                        legacyMigrationChecksum(migration.filePath, migration)
+                    ]);
+                }
+                const legacy = await storedChecksums(client);
+                assert.equal(Object.values(legacy).some((value) => value.startsWith('v2:')), false);
+
+                // A legacy database still boots: the rows are valid, just stored in the old form.
+                await verifyMigrations(client, { migrationsDir: sandbox.migrationsDir });
+
+                const healed = await migrate(client, { migrationsDir: sandbox.migrationsDir });
+                assert.equal(healed.state.head, '007_driver_pwa_auth_foundation');
+                assert.deepEqual(healed.state.needsRebaseline, []);
+                const rebaselined = await storedChecksums(client);
+                assert.equal(Object.values(rebaselined).every((value) => value.startsWith('v2:')), true);
+
+                // Having been rebaselined, the database now accepts the next contract extension.
+                extendContract(sandbox, { table: 'rollkarte_entries', id: '008_rollkarte_entries' });
+                const extended = await migrate(client, { migrationsDir: sandbox.migrationsDir, expectedHead: '008_rollkarte_entries' });
+                assert.equal(extended.state.head, '008_rollkarte_entries');
+            } finally {
+                await client.end();
+            }
+        });
+    } finally {
+        fs.rmSync(sandbox.directory, { recursive: true, force: true });
+    }
+});
+
+// Tampering with an applied migration file is still fatal, and a legacy row cannot be used to
+// smuggle an edited migration past verification.
+test('an edited applied migration file still fails closed', { timeout: 120000 }, async () => {
+    const sandbox = sandboxDatabaseSources();
+    try {
+        await withDatabase(async ({ url }) => {
+            const client = await connected(url);
+            try {
+                await migrate(client, { migrationsDir: sandbox.migrationsDir });
+                const target = path.join(sandbox.migrationsDir, '006_validate_schema.js');
+                fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8')}\n// edited after apply\n`);
+                await assert.rejects(
+                    () => verifyMigrations(client, { migrationsDir: sandbox.migrationsDir }),
+                    (error) => error.code === 'CHECKSUM_MISMATCH'
+                );
+                await assert.rejects(
+                    () => migrate(client, { migrationsDir: sandbox.migrationsDir }),
+                    (error) => error.code === 'CHECKSUM_MISMATCH'
+                );
+            } finally {
+                await client.end();
+            }
+        });
+    } finally {
+        fs.rmSync(sandbox.directory, { recursive: true, force: true });
     }
 });
 

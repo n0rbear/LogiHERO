@@ -7,6 +7,7 @@ const path = require('node:path');
 const {
     MigrationError,
     evaluateMigrationState,
+    legacyMigrationChecksum,
     loadMigrations,
     selectTargetMigrations
 } = require('../src/database/migration-runtime');
@@ -37,20 +38,60 @@ test('migration state detects pending, missing metadata, checksum drift, gaps, a
     assert.equal(invalid.ok, false);
 });
 
-test('migration loading is deterministic and hashes migration dependencies', () => {
+test('extending a shared dependency file does not invalidate already-applied migrations', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'logihero-migrations-'));
+    const firstFile = path.join(directory, '001_first.js');
+    const sharedFile = path.join(directory, 'shared.js');
     try {
-        fs.writeFileSync(path.join(directory, 'shared.js'), 'module.exports = 1;\n');
+        fs.writeFileSync(sharedFile, 'module.exports = { tables: [] };\n');
         fs.writeFileSync(path.join(directory, '002_second.js'), "module.exports={id:'002_second',description:'second',up:async()=>{}};\n");
-        fs.writeFileSync(path.join(directory, '001_first.js'), "module.exports={id:'001_first',description:'first',checksumFiles:['shared.js'],up:async()=>{}};\n");
+        fs.writeFileSync(firstFile, "module.exports={id:'001_first',description:'first',checksumFiles:['shared.js'],up:async()=>{}};\n");
+
         const first = loadMigrations(directory);
         assert.deepEqual(first.map((item) => item.id), ['001_first', '002_second']);
-        const checksum = first[0].checksum;
-        fs.writeFileSync(path.join(directory, 'shared.js'), 'module.exports = 2;\n');
-        const changed = loadMigrations(directory);
-        assert.notEqual(changed[0].checksum, checksum);
-        const state = evaluateMigrationState(changed, [{ id: '001_first', filename: '001_first.js', checksum }], { expectedHead: '001_first' });
-        assert.deepEqual(state.checksumMismatches, ['001_first']);
+        const applied = [{ id: '001_first', filename: '001_first.js', checksum: first[0].checksum }];
+        assert.match(first[0].checksum, /^v2:[0-9a-f]{64}$/);
+
+        // The shared contract grows, exactly as it will when the next product domain adds tables.
+        fs.writeFileSync(sharedFile, "module.exports = { tables: ['pod_acceptances'] };\n");
+        const grown = loadMigrations(directory);
+        assert.equal(grown[0].checksum, first[0].checksum);
+        assert.notEqual(grown[0].dependencyChecksum, first[0].dependencyChecksum);
+
+        const state = evaluateMigrationState(grown, applied, { expectedHead: '001_first' });
+        assert.deepEqual(state.checksumMismatches, []);
+        assert.deepEqual(state.needsRebaseline, []);
+        assert.equal(state.ok, true);
+
+        // The migration file itself is still immutable once applied.
+        fs.writeFileSync(firstFile, "module.exports={id:'001_first',description:'first',checksumFiles:['shared.js'],up:async()=>{ /* edited */ }};\n");
+        const tampered = evaluateMigrationState(loadMigrations(directory), applied, { expectedHead: '001_first' });
+        assert.deepEqual(tampered.checksumMismatches, ['001_first']);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test('checksums written by the previous runtime are rebaselined, not rejected', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'logihero-migrations-'));
+    const firstFile = path.join(directory, '001_first.js');
+    const sharedFile = path.join(directory, 'shared.js');
+    try {
+        fs.writeFileSync(sharedFile, 'module.exports = { tables: [] };\n');
+        fs.writeFileSync(firstFile, "module.exports={id:'001_first',description:'first',checksumFiles:['shared.js'],up:async()=>{}};\n");
+        const [migration] = loadMigrations(directory);
+
+        // A row as the previous runtime wrote it: migration file and dependencies hashed together.
+        const legacyRow = [{ id: '001_first', filename: '001_first.js', checksum: legacyMigrationChecksum(firstFile, migration) }];
+        const legacy = evaluateMigrationState([migration], legacyRow, { expectedHead: '001_first' });
+        assert.deepEqual(legacy.needsRebaseline, ['001_first']);
+        assert.deepEqual(legacy.checksumMismatches, []);
+
+        // A legacy row is only accepted while it still proves the applied bytes, so a genuinely
+        // unrecognised value stays fatal.
+        const bogus = evaluateMigrationState([migration], [{ id: '001_first', filename: '001_first.js', checksum: 'tampered' }], { expectedHead: '001_first' });
+        assert.deepEqual(bogus.checksumMismatches, ['001_first']);
+        assert.deepEqual(bogus.needsRebaseline, []);
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }
