@@ -1,5 +1,9 @@
 # Handover
 
+## Planned core feature: Proof of Delivery
+
+Proof of Delivery / digital delivery acceptance is a planned core LogiHERO capability, not an implemented feature. It requires identified recipient and driver signers over an immutable, versioned snapshot of the exact tour/stop/cargo state, with a content hash and auditable exception states. `cargo DELIVERED` is not equivalent to `POD SIGNED`; changes after signing require a new acceptance and signatures. See `docs/POD_DELIVERY_ACCEPTANCE.md` for the source inventory and future architecture. No Android implementation is included in this checkpoint.
+
 ## Current checkpoint
 
 - Date: 2026-09-07.
