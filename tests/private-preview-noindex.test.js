@@ -76,6 +76,17 @@ test('generated admin HTML includes the robots meta directive', async () => {
     assert.match(res.text, new RegExp(`<meta name="robots" content="${EXPECTED_META}">`));
 });
 
+test('server.js actually wires the middleware into the application', () => {
+    // These tests assemble their own express app, so they would happily pass while the real
+    // server never installed the middleware — which is exactly what happened once during this
+    // change. Pin the wiring itself.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    assert.match(server, /app\.use\(searchExclusionMiddleware\)/, 'searchExclusionMiddleware is not installed');
+    assert.match(server, /app\.use\(robotsTxtMiddleware\)/, 'robotsTxtMiddleware is not installed');
+});
+
 test('every server-rendered HTML head carries the robots meta directive', async () => {
     // Found during review: the admin login page and the driver dashboard build their own
     // <head> rather than going through renderAdminLayout, so adding the tag in one place
