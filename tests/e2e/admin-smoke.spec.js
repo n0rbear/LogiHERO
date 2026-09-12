@@ -99,6 +99,23 @@ async function readOnlyLogin(page) {
     await expect(page).toHaveURL(/\/admin/);
 }
 
+test('browser sends an origin Referer with OSM tile requests', async ({ page }) => {
+    await login(page);
+    const tileReferers = [];
+    await page.route('https://tile.openstreetmap.org/**', async (route) => {
+        tileReferers.push(route.request().headers().referer || '');
+        await route.fulfill({
+            status: 200,
+            contentType: 'image/png',
+            body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+        });
+    });
+
+    await page.goto('/admin/hotels');
+    await expect.poll(() => tileReferers.length).toBeGreaterThan(0);
+    expect(tileReferers.every((referer) => referer === 'http://127.0.0.1:3100/')).toBeTruthy();
+});
+
 test('admin production flow works in real Chromium', async ({ page }) => {
     await login(page);
 
@@ -136,10 +153,13 @@ test('admin production flow works in real Chromium', async ({ page }) => {
 
     await page.goto('/admin/hotels');
     await expect(page.locator('#hotel-map')).toBeVisible();
+    await expect(page.locator('#hotel-map .admin-map-attribution a')).toHaveText('© OpenStreetMap contributors');
+    await expect(page.locator('#hotel-map .admin-map-attribution a')).toHaveAttribute('href', 'https://www.openstreetmap.org/copyright');
     await page.locator('#hotel-search').fill('Dev Hotel');
     await expect(page.locator('#hotel-list')).toContainText('LogiHERO Dev Hotel');
     await page.locator('#hotel-status').selectOption('CONFIRMED');
     await expect(page.locator('#hotel-list')).toContainText('LogiHERO Dev Hotel With Map');
+    await expect(page.locator('#hotel-map .admin-map-attribution')).toBeVisible();
     await page.locator('#hotel-list .hotel-card').first().click();
     await expect(page.getByRole('button', { name: /Szerkeszt/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /Google Maps/i })).toBeVisible();
@@ -230,6 +250,7 @@ test('admin production flow works in real Chromium', async ({ page }) => {
 
     await page.goto('/admin/tours');
     await expect(page.locator('#tour-map')).toBeVisible();
+    await expect(page.locator('#tour-map .admin-map-attribution a')).toHaveText('© OpenStreetMap contributors');
     await expect(page.locator('#tours-list-container')).toContainText('LogiHERO Dev');
     await page.locator('#tours-list-container .tour-item').filter({ hasText: 'LogiHERO Dev Budapest Route' }).click();
     await expect(page.locator('#tour-details-card')).toBeVisible();
@@ -260,6 +281,7 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.locator('#tour-map').dispatchEvent('mouseup', { clientX: mapBox.x + 112, clientY: mapBox.y + 62 });
     await expect.poll(async () => page.locator('#tour-map').getAttribute('data-center')).not.toBe(centerBeforePan);
     await page.locator('#tour-map .admin-map-fit-route').click();
+    await expect(page.locator('#tour-map .admin-map-attribution')).toBeVisible();
     await expect(page.locator('#tour-edit-panel')).toContainText('Tour terminal');
     await page.locator('#tour-basic-form select[name="terminal_mode"]').selectOption('DEPOT');
     await page.locator('#tour-basic-form button[type="submit"]').click();
@@ -267,6 +289,7 @@ test('admin production flow works in real Chromium', async ({ page }) => {
     await page.locator('#route-recalc-button').click();
     await expect(page.locator('#route-recalc-button')).toBeEnabled({ timeout: 15000 });
     await expect(page.locator('#tour-map .admin-map-route-polyline').first()).toBeVisible();
+    await expect(page.locator('#tour-map .admin-map-attribution')).toBeVisible();
     await expect(page.locator('#tour-map .admin-map-marker.terminal-marker')).toBeVisible();
     const hotelMarkers = page.locator('#tour-map .admin-map-marker.hotel-marker');
     await expect(hotelMarkers.first()).toBeVisible();

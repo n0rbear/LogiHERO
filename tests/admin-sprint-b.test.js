@@ -157,6 +157,8 @@ test('Hotel page renders list, filters, edit modal, map hooks, and escaped data'
     assert.equal(res.status, 200);
     assert.match(res.text, /hotel-search/);
     assert.match(res.text, /hotel-map/);
+    assert.match(res.text, /&copy; OpenStreetMap contributors/);
+    assert.match(res.text, /https:\/\/www\.openstreetmap\.org\/copyright/);
     assert.match(res.text, /hotel-tour/);
     assert.match(res.text, /Linked tour/);
     assert.match(res.text, /Standalone\/manual hotel/);
@@ -261,6 +263,8 @@ test('Tour admin regression keeps the legacy rich route visible', async () => {
     assert.match(res.text, /admin-map-tile/);
     assert.match(res.text, /admin-map-route-polyline/);
     assert.match(res.text, /tile\.openstreetmap\.org/);
+    assert.match(res.text, /&copy; OpenStreetMap contributors/);
+    assert.match(res.text, /https:\/\/www\.openstreetmap\.org\/copyright/);
     assert.match(res.text, /tour-route-diagnostics/);
     assert.match(res.text, /route-recalc-button/);
     assert.match(res.text, /\/api\/tours\/' \+ id \+ '\/hotels/);

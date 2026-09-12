@@ -140,8 +140,9 @@ test('request tracing, admin no-store, x-powered-by removal, and safe 500 body',
     assert.equal(res.headers['cache-control'], 'no-store');
     assert.equal(res.headers['x-content-type-options'], 'nosniff');
     assert.equal(res.headers['x-frame-options'], 'DENY');
-    assert.equal(res.headers['referrer-policy'], 'no-referrer');
+    assert.equal(res.headers['referrer-policy'], 'strict-origin-when-cross-origin');
     assert.match(res.headers['content-security-policy'], /frame-ancestors 'none'/);
+    assert.match(res.headers['content-security-policy'], /img-src 'self' data: blob: https:/);
     assert.equal(res.headers['x-powered-by'], undefined);
     assert.match(res.text, /Trace ID: trace-test-1/);
     assert.doesNotMatch(res.text, /database password token/);

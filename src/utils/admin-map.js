@@ -228,7 +228,7 @@ function renderAdminMapScript() {
                 }
                 function ensureMapShell(el) {
                     el.classList.add('admin-map', 'admin-map-ready');
-                    el.innerHTML = '<div class="admin-map-tiles" aria-hidden="true"></div><svg class="admin-map-overlay" aria-hidden="true"></svg><div class="admin-map-markers"></div><div class="admin-map-popup" hidden></div><button class="admin-map-fit-route" type="button">Fit route</button><div class="admin-map-empty">No drawable coordinates.</div>';
+                    el.innerHTML = '<div class="admin-map-tiles" aria-hidden="true"></div><svg class="admin-map-overlay" aria-hidden="true"></svg><div class="admin-map-markers"></div><div class="admin-map-popup" hidden></div><button class="admin-map-fit-route" type="button">Fit route</button><div class="admin-map-empty">No drawable coordinates.</div><div class="admin-map-attribution"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">&copy; OpenStreetMap contributors</a></div>';
                     el.tabIndex = 0;
                 }
                 function mapSize(map) {
@@ -672,6 +672,22 @@ function renderAdminMapStyles() {
         }
         .admin-map-has-data .admin-map-empty {
             display: none;
+        }
+        .admin-map-attribution {
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            z-index: 4;
+            padding: 3px 6px;
+            background: rgba(255,255,255,.9);
+            color: #334155;
+            font-size: 11px;
+            line-height: 1.2;
+            user-select: text;
+        }
+        .admin-map-attribution a {
+            color: inherit;
+            text-decoration: underline;
         }
     `;
 }
