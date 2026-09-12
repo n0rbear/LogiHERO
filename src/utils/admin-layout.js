@@ -1,3 +1,4 @@
+const { ROBOTS_META, SEARCH_INDEXING_ALLOWED } = require('../config/env');
 const { escapeHtml } = require('./escape');
 
 const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = '', csrfToken = '', adminRole = 'FULL_ADMIN' }) => {
@@ -24,6 +25,7 @@ const renderAdminLayout = ({ title, content, activeMenu, scripts = '', styles = 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    ${SEARCH_INDEXING_ALLOWED ? '' : `<meta name="robots" content="${ROBOTS_META}">`}
     <title>LogiHERO Admin | ${escapeHtml(title)}</title>
     <meta name="csrf-token" content="${escapeHtml(csrfToken)}">
     <style>

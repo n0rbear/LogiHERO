@@ -47,6 +47,8 @@ const aiRoutes = require('./src/routes/ai.routes');
 const {
     requestIdMiddleware,
     securityHeadersMiddleware,
+    searchExclusionMiddleware,
+    robotsTxtMiddleware,
     adminNoStoreMiddleware,
     errorHandler
 } = require('./src/middleware/http-hardening');
@@ -59,6 +61,8 @@ const app = express();
 app.disable('x-powered-by');
 app.use(requestIdMiddleware);
 app.use(securityHeadersMiddleware);
+app.use(searchExclusionMiddleware);
+app.use(robotsTxtMiddleware);
 app.use(adminNoStoreMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
