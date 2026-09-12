@@ -4,7 +4,7 @@ const renderAdminLayout = require('../utils/admin-layout');
 const requireAdmin = require('../middleware/requireAdmin');
 const { requireAdminWrite } = require('../middleware/requireAdmin');
 const { generateDeviceToken, hashToken } = require('../middleware/requireDeviceAuth');
-const { ADMIN_TOKEN, READ_ONLY_ADMIN_TOKEN, IS_DEPLOYED } = require('../config/env');
+const { ADMIN_TOKEN, READ_ONLY_ADMIN_TOKEN, IS_DEPLOYED, ROBOTS_META, SEARCH_INDEXING_ALLOWED } = require('../config/env');
 const { rateLimit } = require('../middleware/rate-limit');
 const { escapeHtml } = require('../utils/escape');
 const { renderAdminMapScript, renderAdminMapStyles } = require('../utils/admin-map');
@@ -115,6 +115,7 @@ adminRoutes.get('/login', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html>
 <head>
+    ${SEARCH_INDEXING_ALLOWED ? '' : `<meta name="robots" content="${ROBOTS_META}">`}
     <title>LogiHERO Admin | Login</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>

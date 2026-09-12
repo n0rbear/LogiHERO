@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const ndp = require('../integrations/ndp-client');
+const { SEARCH_INDEXING_ALLOWED, ROBOTS_TAG } = require('../config/env');
 
 function requestIdMiddleware(req, res, next) {
     const incoming = req.headers['x-request-id'];
@@ -23,6 +24,44 @@ function securityHeadersMiddleware(req, res, next) {
         "base-uri 'self'"
     ].join('; '));
     next();
+}
+
+// Keeps the private pre-release out of search results. X-Robots-Tag is honoured for every
+// response type, not just HTML, so admin pages, API JSON and anything served from /downloads or
+// /uploads are all covered by one header rather than by per-route markup.
+//
+// Deliberately not host-conditional. This process only ever answers for LogiHERO, so applying it
+// to every request covers logihero.norbapp.com, the Render *.onrender.com hostname and any
+// preview host, with no way for an unlisted hostname to leak into an index. It cannot affect
+// other NorbApp services because they do not run through this middleware.
+//
+// Passive header only: it does not touch status, body, authentication, CORS or redirects.
+function searchExclusionMiddleware(req, res, next) {
+    if (!SEARCH_INDEXING_ALLOWED) res.setHeader('X-Robots-Tag', ROBOTS_TAG);
+    next();
+}
+
+// Crawlers have to be able to fetch a URL to see its noindex directive, so this deliberately
+// does not disallow anything. "Disallow: /" would block the fetch, leaving a URL that was
+// discovered elsewhere (a link, a certificate log) eligible to appear as a bare result with no
+// noindex ever observed. Serving a permissive robots.txt also makes the intent explicit, so the
+// reflex "just disallow everything" change does not get made later by mistake.
+function robotsTxtMiddleware(req, res, next) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (req.path !== '/robots.txt') return next();
+    const body = SEARCH_INDEXING_ALLOWED
+        ? 'User-agent: *\nDisallow:\n'
+        : [
+            '# LogiHERO is a private pre-release.',
+            '# Crawling is intentionally allowed so the X-Robots-Tag: noindex response header',
+            '# and the HTML robots meta tag can actually be observed. Do not add "Disallow: /":',
+            '# blocking the fetch would hide the noindex directive rather than enforce it.',
+            'User-agent: *',
+            'Disallow:',
+            ''
+        ].join('\n');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.status(200).send(body);
 }
 
 function adminNoStoreMiddleware(req, res, next) {
@@ -81,6 +120,8 @@ function errorHandler(err, req, res, next) {
 module.exports = {
     requestIdMiddleware,
     securityHeadersMiddleware,
+    searchExclusionMiddleware,
+    robotsTxtMiddleware,
     adminNoStoreMiddleware,
     errorHandler
 };

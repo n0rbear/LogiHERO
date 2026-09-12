@@ -41,6 +41,13 @@ const PORT = process.env.PORT || 3000;
 const APP_COMMIT_SHA = process.env.APP_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'unknown';
 const APP_BUILD_TIME = process.env.APP_BUILD_TIME || 'unknown';
 const APP_VERSION = process.env.APP_VERSION || '';
+// LogiHERO is a private pre-release, so every response asks search engines not to index it.
+// This defaults to on: a new environment or hostname is excluded unless someone deliberately
+// opts in, and going public later is a configuration change rather than a code change.
+const SEARCH_INDEXING_ALLOWED = String(process.env.SEARCH_INDEXING || '').trim().toLowerCase() === 'allow';
+const ROBOTS_TAG = 'noindex, nofollow, noarchive, nosnippet, noimageindex';
+const ROBOTS_META = 'noindex,nofollow,noarchive,nosnippet,noimageindex';
+
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 const MISTRAL_API_URL = process.env.MISTRAL_API_URL || 'https://api.mistral.ai/v1/chat/completions';
 
@@ -78,6 +85,9 @@ module.exports = {
     APP_COMMIT_SHA,
     APP_BUILD_TIME,
     APP_VERSION,
+    SEARCH_INDEXING_ALLOWED,
+    ROBOTS_TAG,
+    ROBOTS_META,
     MISTRAL_API_KEY,
     MISTRAL_API_URL,
     AI_RATE_LIMIT_BURST_WINDOW_MS,

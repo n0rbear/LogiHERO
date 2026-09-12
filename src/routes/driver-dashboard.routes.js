@@ -1,3 +1,4 @@
+const { ROBOTS_META, SEARCH_INDEXING_ALLOWED } = require('../config/env');
 const express = require('express');
 const pool = require('../database/pool');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -60,7 +61,7 @@ driverDashboardRoutes.get('/driver/:name', requireAdmin, async (req, res) => {
             : `<p style="margin:5px 0; font-size:14px;">${escapeHtml(update.next_stop)}</p>`;
     }
 
-    const html = `<html><head><title>ERP - ${pageNameHtml}</title>
+    const html = `<html><head>${SEARCH_INDEXING_ALLOWED ? '' : `<meta name="robots" content="${ROBOTS_META}">`}<title>ERP - ${pageNameHtml}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
