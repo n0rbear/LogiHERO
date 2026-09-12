@@ -65,7 +65,7 @@ function robotsTxtMiddleware(req, res, next) {
 }
 
 function adminNoStoreMiddleware(req, res, next) {
-    if (req.path === '/admin' || req.path.startsWith('/admin/')) {
+    if (req.path === '/admin' || req.path.startsWith('/admin/') || req.path === '/app' || req.path.startsWith('/app/')) {
         res.setHeader('Cache-Control', 'no-store');
     }
     next();

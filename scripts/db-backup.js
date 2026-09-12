@@ -5,14 +5,17 @@ const os = require('node:os');
 const path = require('node:path');
 const { Client } = require('pg');
 const { TABLES } = require('../src/database/schema-contract');
+const { DRIVER_PWA_TABLES } = require('../src/database/driver-pwa-schema');
 const { assertLocalDatabaseUrl, inspectDatabase } = require('../src/database/database-inspection');
 
 function firstLine(value) {
     return Buffer.isBuffer(value) ? value.toString('utf8').split(/\r?\n/)[0] : String(value || '').split(/\r?\n/)[0];
 }
 
+const BACKUP_TABLES = [...TABLES.map(([table]) => table), ...DRIVER_PWA_TABLES];
+
 function dumpArgs(databaseUrl, file) {
-    const tables = TABLES.map(([table]) => `--table=public.${table}`);
+    const tables = BACKUP_TABLES.map((table) => `--table=public.${table}`);
     return ['--format=custom', '--data-only', '--no-owner', '--no-acl', ...tables, '--file', file, databaseUrl];
 }
 
@@ -23,7 +26,7 @@ function runPgDump(databaseUrl, file) {
     const dockerArgs = [
         'exec', '-e', `PGPASSWORD=${decodeURIComponent(url.password)}`, 'logihero-postgres-dev',
         'pg_dump', '--format=custom', '--data-only', '--no-owner', '--no-acl',
-        ...TABLES.map(([table]) => `--table=public.${table}`),
+        ...BACKUP_TABLES.map((table) => `--table=public.${table}`),
         '-U', decodeURIComponent(url.username), '-d', url.pathname.slice(1)
     ];
     const dockerConfig = process.env.DOCKER_CONFIG || path.join(os.tmpdir(), 'logihero-docker-config');
@@ -68,10 +71,10 @@ async function backup(options = {}) {
         archive: path.basename(file),
         bytes: stat.size,
         sha256: checksum,
-        tables: TABLES.map(([table]) => table),
-        rowCounts: Object.fromEntries(TABLES.map(([table]) => [table, inspection.counts[table]])),
+        tables: BACKUP_TABLES,
+        rowCounts: Object.fromEntries(BACKUP_TABLES.map((table) => [table, inspection.counts[table]])),
         schemaFingerprint: inspection.fingerprint,
-        migrationHead: '006_validate_schema',
+        migrationHead: '007_driver_pwa_auth_foundation',
         integrity: {
             uuids: inspection.uuids,
             relationships: inspection.relationships,
@@ -93,4 +96,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { backup, dumpArgs, runPgDump };
+module.exports = { BACKUP_TABLES, backup, dumpArgs, runPgDump };

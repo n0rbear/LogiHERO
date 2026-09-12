@@ -2,6 +2,13 @@
 
 Severity reflects current repository evidence as of 2026-09-06.
 
+## Driver PWA authentication follow-ups (2026-09-12)
+
+- Login/admin-auth rate limits use the existing process-local limiter. They are adequate for the current single-process foundation but must move to shared durable state before horizontal scaling.
+- Expired and revoked driver session rows are denied immediately but are not yet pruned by a scheduled retention job.
+- Trusted browser registration and native location-companion credential issuance are deliberately deferred. The existing hashed/revocable `driver_devices` primitive is the leading reuse candidate, but no new enrollment route exists.
+- No service worker is installed. Offline logistics behavior and authenticated-cache safety require a separate design before caching is introduced.
+
 The 2026-09-06 admin write authorization audit found and closed the remaining READ_ONLY bearer gaps on legacy cost/tour and development seed/reset routes. All unsafe `requireAdmin` route declarations now also require `requireAdminWrite`, with session logout as the sole intentional non-business-data exception.
 
 A follow-up 2026-09-06 domain invariant audit of generic `/api/sync` found and closed seven confirmed non-ownership bypasses (cost approval/payment status, unauthorized cargo creation and status/deletion, hotel status/deletion, writes to admin-approved work days/entries, tour/stop completion-state forgery, and — found by pre-merge review of the audit's own first fix — two variants of the approved-work-day entry lock being bypassable via the incoming `work_day_uuid`). TD-004 is now closed for generic `/api/sync`. That same audit traced actual Android source and found the real production tour/stop completion path is a *different*, pre-existing route (`POST /api/sync-tours/:driverName`) which has its own narrower, separate gap — see TD-009.

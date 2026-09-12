@@ -4,6 +4,11 @@ Current source must be inspected before relying on any claim below.
 
 ## Verified or integrated on this branch
 
+- Driver PWA passwords are Argon2id hashes in a driver-specific account table; temporary plaintext passwords are returned only at creation/reset and never persisted.
+- Driver PWA sessions use HttpOnly cookies with only opaque token hashes stored in PostgreSQL, expire after 12 hours, are checked against account password version and driver/account active state, and support immediate server-side revocation.
+- Driver PWA state-changing requests require a per-session CSRF token; login POST requires a same-host Origin/Referer and is process-locally rate limited with generic credential failures.
+- Driver PWA identity is derived by joining the authenticated session to `driver_accounts` and `drivers`; browser-supplied driver/company identifiers cannot select ownership.
+- Admin driver credential operations require FULL_ADMIN write authorization. Password reset, web-login disablement, password change, explicit revoke, and logout invalidate appropriate sessions.
 - Android backend device credentials are now isolated to the configured backend origin through `BackendCredentialInterceptor`.
 - The shared Mistral/OSRM OkHttp client should remain credential-free.
 - Backend credential redirects are disabled for the derived backend client.
@@ -26,6 +31,7 @@ Current source must be inspected before relying on any claim below.
 ## Known high-risk gaps from current source
 
 - AI usage limiting is process-local and resets on backend restart; use a shared/durable limiter if deployment scales beyond one backend instance.
+- Driver web login and admin credential-operation rate limits are process-local and reset on restart; use a shared limiter before scaling the backend horizontally.
 - NDP runtime events may miss commit SHA correlation.
 
 ## Agent rules

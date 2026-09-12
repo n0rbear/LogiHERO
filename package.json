@@ -30,10 +30,14 @@
     "typecheck": "node scripts/check-syntax.js"
   },
   "dependencies": {
+    "argon2": "^0.45.1",
     "express": "^4.18.2",
     "pg": "^8.11.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2"
+  },
+  "overrides": {
+    "qs": "6.16.0"
   }
 }

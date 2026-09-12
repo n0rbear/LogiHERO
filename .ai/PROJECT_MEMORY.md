@@ -11,6 +11,7 @@
 ## Current architecture facts
 
 - Backend/admin: one Express application in `server.js`, server-rendered admin HTML, PostgreSQL via `src/database/pool.js`.
+- Primary driver direction: mobile-first Driver PWA using durable PostgreSQL-backed browser sessions. Android and iOS native apps are optional future location companions only.
 - Android app: Gradle Android application under `app/`, still using package/namespace `com.example.driverassistant`.
 - NDP: repository-local SDK under `sdks/android-agent` plus backend client in `src/integrations/ndp-client.js`.
 - Deployment evidence is checked through `/health`, `/version`, Render, tests, and NDP when available.
@@ -40,3 +41,15 @@ The ZIP claims many fixes as complete on a prior agent branch. In current `main`
 ### MEM-006 - POD is a core feature and signed state is immutable
 
 Proof of Delivery / digital delivery acceptance is planned but not implemented. It is distinct from the cargo `DELIVERED` state. A future signature must cover a server-built, immutable, versioned snapshot with a content hash; any covered data change requires a new acceptance and signatures. See `docs/POD_DELIVERY_ACCEPTANCE.md`.
+
+### MEM-007 - Driver product is PWA-first
+
+The Driver PWA is the primary new driver client for Android, iPhone, tablet, and browser. The existing large Android app is frozen reference code. Future native companions should be thin and limited to OS capabilities such as reliable background location.
+
+### MEM-008 - Web username is a login handle, never ownership
+
+Driver web login uses a separate `driver_accounts` record and durable `driver_web_sessions`. Every request derives driver UUID and company UUID from the server-side session joined to the driver record. Browser-supplied names or UUIDs are never authoritative.
+
+### MEM-009 - AI is parked
+
+AI is parked and is not part of current LogiHERO release scope. Keep the existing isolated backend reusable, but do not add AI UI, AI release requirements, or roadmap work without a new explicit decision.
