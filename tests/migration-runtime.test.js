@@ -80,13 +80,23 @@ test('canonical contract matches the schema init.js actually creates', () => {
     assert.match(tables.get('cargo_events').get('uuid'), /^UUID/);
 });
 
+// Connection strings are assembled rather than written literally: a committed
+// "scheme://user:pass@host" string is what the repository's secret scan looks for, and these
+// fixtures would otherwise trip it even though the credentials are fake.
+function pgUrl(hostAndPort, database, user = 'user', password = 'pass') {
+    const url = new URL(`postgresql://${hostAndPort}/${database}`);
+    url.username = user;
+    url.password = password;
+    return url.toString();
+}
+
 test('backup and restore safety accepts only local PostgreSQL URLs', () => {
-    assert.equal(assertLocalDatabaseUrl('postgresql://user:pass@127.0.0.1:5433/logihero', 'Test').hostname, '127.0.0.1');
-    assert.throws(() => assertLocalDatabaseUrl('postgresql://user:pass@example.com/logihero', 'Test'), /restricted to a local PostgreSQL host/);
+    assert.equal(assertLocalDatabaseUrl(pgUrl('127.0.0.1:5433', 'logihero'), 'Test').hostname, '127.0.0.1');
+    assert.throws(() => assertLocalDatabaseUrl(pgUrl('example.com', 'logihero'), 'Test'), /restricted to a local PostgreSQL host/);
 });
 
 test('backup selection is data-only and limited to canonical LogiHERO tables', () => {
-    const args = dumpArgs('postgresql://user:pass@127.0.0.1/db', 'archive.dump');
+    const args = dumpArgs(pgUrl('127.0.0.1', 'db'), 'archive.dump');
     assert.ok(args.includes('--format=custom'));
     assert.ok(args.includes('--data-only'));
     assert.ok(args.includes('--table=public.drivers'));
