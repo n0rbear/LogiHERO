@@ -1,8 +1,9 @@
 const { TABLES, schemaFingerprint, validateCanonicalSchema } = require('./schema-contract');
+const { DRIVER_PWA_TABLES } = require('./driver-pwa-schema');
 const { verifyMigrations } = require('./migration-runtime');
 
-const LOGIHERO_TABLES = ['schema_migrations', ...TABLES.map(([table]) => table)];
-const UUID_TABLES = ['companies', 'drivers', 'web_users', 'live_updates', 'costs', 'chat_messages', 'work_times', 'work_days', 'work_time_entries', 'work_time_audit', 'work_time_conflicts', 'tours', 'stops', 'hotels', 'cargo', 'cargo_events'];
+const LOGIHERO_TABLES = ['schema_migrations', ...TABLES.map(([table]) => table), ...DRIVER_PWA_TABLES];
+const UUID_TABLES = ['companies', 'drivers', 'web_users', 'live_updates', 'costs', 'chat_messages', 'work_times', 'work_days', 'work_time_entries', 'work_time_audit', 'work_time_conflicts', 'tours', 'stops', 'hotels', 'cargo', 'cargo_events', ...DRIVER_PWA_TABLES];
 
 function assertLocalDatabaseUrl(databaseUrl, purpose) {
     const parsed = new URL(databaseUrl);
@@ -40,6 +41,9 @@ async function relationshipIntegrity(client) {
         hotelsWithoutTour: 'SELECT COUNT(*)::int AS count FROM hotels h LEFT JOIN tours t ON t.id=h.tour_id WHERE h.tour_id IS NOT NULL AND t.id IS NULL',
         cargoWithoutTour: 'SELECT COUNT(*)::int AS count FROM cargo c LEFT JOIN tours t ON t.id=c.tour_id WHERE c.tour_id IS NOT NULL AND t.id IS NULL',
         cargoEventsWithoutCargo: 'SELECT COUNT(*)::int AS count FROM cargo_events e LEFT JOIN cargo c ON c.id=e.cargo_id WHERE e.cargo_id IS NOT NULL AND c.id IS NULL',
+        driverAccountsWithoutDriver: 'SELECT COUNT(*)::int AS count FROM driver_accounts a LEFT JOIN drivers d ON d.uuid=a.driver_uuid WHERE d.uuid IS NULL',
+        driverSessionsWithoutAccount: 'SELECT COUNT(*)::int AS count FROM driver_web_sessions s LEFT JOIN driver_accounts a ON a.uuid=s.account_uuid WHERE a.uuid IS NULL',
+        invalidDriverSessionHashes: "SELECT COUNT(*)::int AS count FROM driver_web_sessions WHERE length(token_hash) <> 64 OR length(csrf_token_hash) <> 64",
         invalidDeviceTokenHashes: "SELECT COUNT(*)::int AS count FROM driver_devices WHERE device_token_hash IS NOT NULL AND length(device_token_hash) <> 64"
     };
     const result = {};

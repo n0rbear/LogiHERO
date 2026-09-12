@@ -1,5 +1,16 @@
 # Handover
 
+## Current checkpoint: Driver PWA authentication foundation
+
+- Date: 2026-09-12.
+- Branch: `feat/driver-pwa-auth-foundation`, based exactly on main `1b9c87a74c4be63650dce679ed69ec1056e85a78` after squash-merging PR #9 and PR #10.
+- Direction: LogiHERO is PWA-first; Android is frozen reference code and optional future native work is limited to thin location companions. AI is parked and outside active release scope.
+- Migration `007_driver_pwa_auth_foundation` adds one Argon2id web account per driver and durable, hashed, revocable browser sessions. Historical migration files/checksum dependencies remain unchanged.
+- Minimal routes are `/app/login`, `/app/change-password`, `/app`, `/app/logout`, and `/app/manifest.webmanifest`. Authenticated pages are no-store; there is intentionally no service worker or offline caching yet.
+- Admin driver details can provision/reset a one-time temporary password, enable/disable login, and revoke sessions. READ_ONLY admins cannot mutate credentials.
+- Identity remains server-derived from the session's account → driver join. Existing `driver_devices`, activation, Android routes, and `requireDeviceAuth` are unchanged. See `docs/DRIVER_PWA_ARCHITECTURE.md`.
+- Do not proceed into tour, cargo, POD, camera, map, offline, or other Driver PWA modules until explicitly requested.
+
 ## Planned core feature: Proof of Delivery
 
 Proof of Delivery / digital delivery acceptance is a planned core LogiHERO capability, not an implemented feature. It requires identified recipient and driver signers over an immutable, versioned snapshot of the exact tour/stop/cargo state, with a content hash and auditable exception states. `cargo DELIVERED` is not equivalent to `POD SIGNED`; changes after signing require a new acceptance and signatures. See `docs/POD_DELIVERY_ACCEPTANCE.md` for the source inventory and future architecture. No Android implementation is included in this checkpoint.

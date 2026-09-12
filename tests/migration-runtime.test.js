@@ -113,7 +113,7 @@ test('restore manifest rejects an archive with a mismatched SHA-256', () => {
         fs.writeFileSync(`${archive}.manifest.json`, JSON.stringify({
             formatVersion: 1,
             scope: 'logihero-data-only',
-            migrationHead: '006_validate_schema',
+            migrationHead: '007_driver_pwa_auth_foundation',
             sha256: '0'.repeat(64),
             tables: TABLES.map(([table]) => table)
         }));

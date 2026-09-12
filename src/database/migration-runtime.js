@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_MIGRATIONS_DIR = path.join(__dirname, 'migrations');
-const LATEST_MIGRATION_ID = '006_validate_schema';
+const LATEST_MIGRATION_ID = '007_driver_pwa_auth_foundation';
 const MIGRATION_LOCK_KEY = '7246494845524';
 
 class MigrationError extends Error {

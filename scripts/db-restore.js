@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { Client } = require('pg');
 const { TABLES } = require('../src/database/schema-contract');
+const { DRIVER_PWA_TABLES } = require('../src/database/driver-pwa-schema');
 const { assertLocalDatabaseUrl, inspectDatabase } = require('../src/database/database-inspection');
 const { migrate } = require('../src/database/migration-runtime');
 
@@ -17,10 +18,12 @@ function loadManifest(backupFile, manifestFile = `${backupFile}.manifest.json`) 
     const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
     const checksum = crypto.createHash('sha256').update(fs.readFileSync(backupFile)).digest('hex');
     if (manifest.sha256 !== checksum) throw new Error('backup SHA-256 mismatch');
-    if (manifest.scope !== 'logihero-data-only' || manifest.migrationHead !== '006_validate_schema') {
+    if (manifest.scope !== 'logihero-data-only' || !['006_validate_schema', '007_driver_pwa_auth_foundation'].includes(manifest.migrationHead)) {
         throw new Error('unsupported backup manifest');
     }
-    const expectedTables = TABLES.map(([table]) => table);
+    const expectedTables = manifest.migrationHead === '006_validate_schema'
+        ? TABLES.map(([table]) => table)
+        : [...TABLES.map(([table]) => table), ...DRIVER_PWA_TABLES];
     if (JSON.stringify(manifest.tables) !== JSON.stringify(expectedTables)) throw new Error('backup table scope mismatch');
     return manifest;
 }
@@ -68,7 +71,7 @@ async function restore(options = {}) {
         await assertEmptyTarget(client);
         await migrate(client);
         const empty = [];
-        for (const [table] of TABLES) {
+        for (const table of [...TABLES.map(([name]) => name), ...DRIVER_PWA_TABLES]) {
             empty.push(Number((await client.query(`SELECT COUNT(*)::int AS count FROM ${table}`)).rows[0].count));
         }
         if (empty.some((count) => count !== 0)) throw new Error('migrated restore target contains application data');
@@ -83,7 +86,7 @@ async function restore(options = {}) {
     await client.connect();
     try {
         const inspection = await inspectDatabase(client);
-        const actualCounts = Object.fromEntries(TABLES.map(([table]) => [table, inspection.counts[table]]));
+        const actualCounts = Object.fromEntries(manifest.tables.map((table) => [table, inspection.counts[table]]));
         if (JSON.stringify(actualCounts) !== JSON.stringify(manifest.rowCounts)) throw new Error('restored row counts do not match manifest');
         if (inspection.fingerprint !== manifest.schemaFingerprint) throw new Error('restored schema fingerprint does not match manifest');
         return { status: 'RESTORE_OK', backupFile, database, inspection };

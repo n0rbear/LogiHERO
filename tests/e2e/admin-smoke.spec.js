@@ -80,6 +80,78 @@ test('console collector ignores only external OSM tile network denials', () => {
     expect(isBenignExternalTileConsoleError(apiMessage)).toBeFalsy();
 });
 
+test('dispatcher provisions a driver web account and first login forces password change', async ({ page, browser, baseURL }) => {
+    await login(page);
+    await page.goto('/admin/drivers');
+    await page.getByRole('row', { name: /LogiHERO Dev Driver Active/i }).getByRole('button', { name: /Adatlap/i }).click();
+
+    const unique = Date.now();
+    const username = `driver.e2e.${unique}`;
+    await page.locator('#driver-web-username').fill(username);
+    await page.getByRole('button', { name: /Fiók létrehozása|Új ideiglenes jelszó/i }).click();
+    await expect(page.locator('#driver-web-temp-panel')).toBeVisible();
+    const temporaryPassword = await page.locator('#driver-web-temp-password').textContent();
+    expect(temporaryPassword).toMatch(/^.{12,}$/);
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Munkamenetek visszavonása' })).toBeVisible();
+
+    const driverContext = await browser.newContext({ baseURL });
+    const driverPage = await driverContext.newPage();
+    try {
+        await driverPage.goto('/app/login');
+        await driverPage.locator('#username').fill(username);
+        await driverPage.locator('#password').fill(temporaryPassword);
+        await driverPage.getByRole('button', { name: 'Bejelentkezés' }).click();
+        await expect(driverPage).toHaveURL(/\/app\/change-password$/);
+
+        const cookies = await driverContext.cookies();
+        const sessionCookie = cookies.find((cookie) => cookie.name === 'driver_session');
+        const csrfCookie = cookies.find((cookie) => cookie.name === 'driver_csrf');
+        expect(sessionCookie?.httpOnly).toBeTruthy();
+        expect(sessionCookie?.sameSite).toBe('Lax');
+        expect(csrfCookie?.httpOnly).toBeFalsy();
+
+        const newPassword = `Driver-E2E-${unique}!`;
+        await driverPage.locator('#password').fill(newPassword);
+        await driverPage.locator('#confirmation').fill(newPassword);
+        await driverPage.getByRole('button', { name: 'Jelszó mentése' }).click();
+        await expect(driverPage).toHaveURL(/\/app$/);
+        await expect(driverPage.getByRole('heading', { name: /LogiHERO Dev Driver Active/ })).toBeVisible();
+
+        const registrations = await driverPage.evaluate(async () => navigator.serviceWorker ? (await navigator.serviceWorker.getRegistrations()).length : 0);
+        expect(registrations).toBe(0);
+        const manifest = await driverPage.request.get('/app/manifest.webmanifest');
+        expect(manifest.ok()).toBeTruthy();
+        expect((await manifest.json()).start_url).toBe('/app');
+
+        await driverPage.locator('input[name="_csrf"]').evaluate((input) => { input.value = 'invalid-csrf'; });
+        await driverPage.getByRole('button', { name: 'Kijelentkezés' }).click();
+        await expect(driverPage.getByRole('heading', { name: 'Érvénytelen kérés' })).toBeVisible();
+        await driverPage.goto('/app');
+        await expect(driverPage).toHaveURL(/\/app$/);
+        await driverPage.getByRole('button', { name: 'Kijelentkezés' }).click();
+        await expect(driverPage).toHaveURL(/\/app\/login$/);
+
+        await driverPage.locator('#username').fill(username);
+        await driverPage.locator('#password').fill(temporaryPassword);
+        await driverPage.getByRole('button', { name: 'Bejelentkezés' }).click();
+        await expect(driverPage).toHaveURL(/\/app\/login\?error=1$/);
+
+        await driverPage.locator('#username').fill(username);
+        await driverPage.locator('#password').fill(newPassword);
+        await driverPage.getByRole('button', { name: 'Bejelentkezés' }).click();
+        await expect(driverPage).toHaveURL(/\/app$/);
+
+        page.once('dialog', (dialog) => dialog.accept());
+        await page.getByRole('button', { name: 'Munkamenetek visszavonása' }).click();
+        await expect(page.locator('#driver-web-session-count')).toHaveText('0');
+        await driverPage.goto('/app');
+        await expect(driverPage).toHaveURL(/\/app\/login$/);
+    } finally {
+        await driverContext.close();
+    }
+});
+
 test.afterEach(async ({ page }) => {
     expect(page.failures).toEqual([]);
 });

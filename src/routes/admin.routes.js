@@ -91,6 +91,42 @@ function renderDriverForm({ driver = {}, mode, csrfToken, error = '' }) {
     `;
 }
 
+function renderDriverWebAccountPanel(account, readOnly) {
+    const exists = Boolean(account);
+    const status = !exists ? 'Nincs létrehozva' : account.is_active ? 'Aktív' : 'Letiltva';
+    const change = account?.must_change_password ? 'Igen' : 'Nem';
+    return `
+        <div class="card" id="driver-web-account-card">
+            <h4 style="margin-top:0;">Sofőr webes belépés</h4>
+            <p style="color:var(--color-text-muted);">Külön böngészős fiók. Nem módosítja az Android eszközkapcsolatot.</p>
+            <div style="display:grid; grid-template-columns:minmax(220px, 1fr) auto; gap:14px; align-items:end;">
+                <div>
+                    <label for="driver-web-username" style="display:block; margin-bottom:8px; font-weight:600;">Felhasználónév</label>
+                    <input id="driver-web-username" value="${escapeHtml(account?.username || '')}" maxlength="64" pattern="[A-Za-z0-9._-]{3,64}" ${readOnly ? 'disabled' : ''} style="width:100%;">
+                </div>
+                ${readOnly ? '<span class="badge">Read-only</span>' : `<button type="button" class="btn btn-primary" onclick="provisionDriverWebAccount()">${exists ? 'Új ideiglenes jelszó és név mentése' : 'Fiók létrehozása'}</button>`}
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:18px; margin-top:16px; font-size:14px;">
+                <span><b>Állapot:</b> <span id="driver-web-status">${status}</span></span>
+                <span><b>Jelszócsere szükséges:</b> <span id="driver-web-must-change">${change}</span></span>
+                <span><b>Aktív munkamenetek:</b> <span id="driver-web-session-count">${escapeHtml(account?.active_sessions || 0)}</span></span>
+            </div>
+            ${!readOnly && exists ? `
+                <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:16px;">
+                    <button type="button" class="btn btn-outline" onclick="resetDriverWebPassword()">Jelszó visszaállítása</button>
+                    <button type="button" class="btn btn-outline" onclick="setDriverWebStatus(${account.is_active ? 'false' : 'true'})">${account.is_active ? 'Belépés letiltása' : 'Belépés engedélyezése'}</button>
+                    <button type="button" class="btn btn-outline" onclick="revokeDriverWebSessions()">Munkamenetek visszavonása</button>
+                </div>
+            ` : ''}
+            <div id="driver-web-temp-panel" style="display:none; margin-top:16px; padding:14px; border:1px solid var(--color-border); border-radius:8px; background:#fff7ed;">
+                <b>Ideiglenes jelszó — csak most látható</b>
+                <p style="margin:7px 0;">Biztonságos csatornán add át a sofőrnek. Első belépéskor kötelező megváltoztatnia.</p>
+                <code id="driver-web-temp-password" data-testid="driver-web-temp-password"></code>
+            </div>
+        </div>
+    `;
+}
+
 // --- 1. Public Authentication ---
 
 adminRoutes.get('/login', (req, res) => {
@@ -402,6 +438,15 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
         }));
         const tours = (await pool.query('SELECT id, name, tour_status, date, is_current FROM tours WHERE driver_uuid = $1 OR driver_name = $2 ORDER BY date DESC LIMIT 8', [driver.uuid, driver.name])).rows;
         const devices = (await pool.query('SELECT device_id, device_name, is_active, linked_at, last_seen_at, revision, token_rotated_at FROM driver_devices WHERE driver_uuid = $1 ORDER BY last_seen_at DESC NULLS LAST', [driver.uuid])).rows;
+        const webAccount = (await pool.query(
+            `SELECT a.username, a.is_active, a.must_change_password,
+                    COUNT(s.uuid) FILTER (WHERE s.revoked_at IS NULL AND s.expires_at > $2)::int AS active_sessions
+             FROM driver_accounts a
+             LEFT JOIN driver_web_sessions s ON s.account_uuid = a.uuid
+             WHERE a.driver_uuid = $1
+             GROUP BY a.uuid`,
+            [driver.uuid, Date.now()]
+        )).rows[0];
         const lastUpdate = (await pool.query('SELECT status, current_tour, timestamp FROM live_updates WHERE driver_uuid = $1 OR driver_name = $2 ORDER BY timestamp DESC LIMIT 1', [driver.uuid, driver.name])).rows[0];
 
         const tourRows = tours.map(t => `
@@ -444,6 +489,7 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                 </div>
                 <div>
                     ${renderDriverForm({ driver, mode: 'edit', csrfToken: req.adminCsrfToken })}
+                    ${renderDriverWebAccountPanel(webAccount, req.adminRole === 'READ_ONLY')}
                     <div class="card">
                         <h4 style="margin-top:0;">Kapcsolódó túrák</h4>
                         <table style="width:100%; border-collapse:collapse;"><thead><tr><th>ID</th><th>Név</th><th>Státusz</th><th>Dátum</th><th>Aktuális</th></tr></thead><tbody>${tourRows}</tbody></table>
@@ -496,6 +542,56 @@ adminRoutes.get('/drivers/:uuid', requireAdmin, async (req, res) => {
                     document.querySelector('input[name="is_active"]').checked = false;
                 }
                 document.getElementById('deactivate-driver-button')?.addEventListener('click', deactivateDriver);
+                async function driverWebRequest(path, body) {
+                    const response = await fetch('/admin/drivers/' + driverUuid + '/web-account/' + path, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-csrf-token': window.adminCsrfToken },
+                        body: JSON.stringify(body || {})
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(data.error || 'A művelet sikertelen.');
+                    return data;
+                }
+                function showDriverTemporaryPassword(data) {
+                    document.getElementById('driver-web-temp-password').textContent = data.temporaryPassword || '';
+                    document.getElementById('driver-web-temp-panel').style.display = data.temporaryPassword ? 'block' : 'none';
+                    document.getElementById('driver-web-status').textContent = data.isActive ? 'Aktív' : 'Letiltva';
+                    document.getElementById('driver-web-must-change').textContent = data.mustChangePassword ? 'Igen' : 'Nem';
+                }
+                async function provisionDriverWebAccount() {
+                    try {
+                        const username = document.getElementById('driver-web-username').value;
+                        const data = await driverWebRequest('provision', { username });
+                        showDriverTemporaryPassword(data);
+                        showToast('Webes sofőrfiók mentve. Az ideiglenes jelszó csak most látható.');
+                    } catch (error) { showToast(error.message, 'error'); }
+                }
+                async function resetDriverWebPassword() {
+                    if (!confirm('Új ideiglenes jelszót generálsz? Minden aktív munkamenet megszűnik.')) return;
+                    try {
+                        const data = await driverWebRequest('reset-password');
+                        showDriverTemporaryPassword(data);
+                        document.getElementById('driver-web-session-count').textContent = '0';
+                        showToast('Ideiglenes jelszó elkészült.');
+                    } catch (error) { showToast(error.message, 'error'); }
+                }
+                async function setDriverWebStatus(isActive) {
+                    try {
+                        const data = await driverWebRequest('status', { isActive });
+                        document.getElementById('driver-web-status').textContent = data.isActive ? 'Aktív' : 'Letiltva';
+                        if (!data.isActive) document.getElementById('driver-web-session-count').textContent = '0';
+                        showToast(data.isActive ? 'Belépés engedélyezve.' : 'Belépés letiltva.');
+                        setTimeout(() => location.reload(), 500);
+                    } catch (error) { showToast(error.message, 'error'); }
+                }
+                async function revokeDriverWebSessions() {
+                    if (!confirm('Minden webes munkamenetet visszavonsz?')) return;
+                    try {
+                        await driverWebRequest('revoke-sessions');
+                        document.getElementById('driver-web-session-count').textContent = '0';
+                        showToast('Munkamenetek visszavonva.');
+                    } catch (error) { showToast(error.message, 'error'); }
+                }
                 async function rotateDeviceToken(button) {
                     if (window.isReadOnlyAdmin) return showToast('Read-only admin nem rotalhat tokent.', 'error');
                     if (!confirm('Uj tokent general ehhez az eszkohoz? A regi token azonnal ervenytelen lesz.')) return;

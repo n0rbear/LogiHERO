@@ -103,13 +103,13 @@ async function createLegacyFingerprint(client, { includeCompany = true } = {}) {
     await client.query(`INSERT INTO live_updates (driver_name) VALUES ('Legacy Driver')`);
 }
 
-test('empty database migrates 001-006, stays idempotent, and readiness is READY', { timeout: 120000 }, async () => {
+test('empty database migrates 001-007, stays idempotent, and readiness is READY', { timeout: 120000 }, async () => {
     await withDatabase(async ({ url }) => {
         const client = await connected(url);
         try {
             const first = await migrate(client);
-            assert.equal(first.state.head, '006_validate_schema');
-            assert.equal(first.results.filter((item) => item.status === 'applied').length, 6);
+            assert.equal(first.state.head, '007_driver_pwa_auth_foundation');
+            assert.equal(first.results.filter((item) => item.status === 'applied').length, 7);
             const second = await migrate(client);
             assert.equal(second.results.every((item) => item.status === 'already_applied'), true);
             assert.equal((await client.query("SELECT data_type FROM information_schema.columns WHERE table_name='tours' AND column_name='date'")).rows[0].data_type, 'bigint');
@@ -125,7 +125,7 @@ test('empty database migrates 001-006, stays idempotent, and readiness is READY'
             const ready = await request(app);
             assert.equal(ready.status, 200);
             assert.equal(ready.body.status, 'READY');
-            assert.equal(ready.body.checks.migrations.head, '006_validate_schema');
+            assert.equal(ready.body.checks.migrations.head, '007_driver_pwa_auth_foundation');
         } finally {
             await client.end();
         }
@@ -138,7 +138,7 @@ test('legacy production-shaped schema upgrades without implicit demo or permissi
         try {
             await createLegacyFingerprint(client);
             const result = await migrate(client);
-            assert.equal(result.state.head, '006_validate_schema');
+            assert.equal(result.state.head, '007_driver_pwa_auth_foundation');
             const driver = (await client.query("SELECT uuid, company_uuid FROM drivers WHERE name='Legacy Driver'")).rows[0];
             assert.ok(driver.uuid);
             assert.ok(driver.company_uuid);
@@ -161,7 +161,7 @@ test('migrate --to stops at the requested head and a later run completes the seq
         try {
             const partial = await migrate(client, { to: '004_reconcile_types_and_defaults' });
             assert.equal(partial.state.head, '004_reconcile_types_and_defaults');
-            assert.deepEqual(partial.state.pending, ['005_add_constraints_and_indexes', '006_validate_schema']);
+            assert.deepEqual(partial.state.pending, ['005_add_constraints_and_indexes', '006_validate_schema', '007_driver_pwa_auth_foundation']);
             await assert.rejects(() => verifyMigrations(client), (error) => error.code === 'MIGRATIONS_PENDING');
             const app = express();
             app.use(createHealthRouter({ db: client, config: { DATABASE_URL: url, ADMIN_TOKEN: 'test-admin', IS_DEPLOYED: false } }));
@@ -169,8 +169,8 @@ test('migrate --to stops at the requested head and a later run completes the seq
             assert.equal(notReady.status, 503);
             assert.equal(notReady.body.checks.migrations.code, 'MIGRATIONS_PENDING');
             const completed = await migrate(client);
-            assert.equal(completed.state.head, '006_validate_schema');
-            assert.equal(completed.results.filter((item) => item.status === 'applied').length, 2);
+            assert.equal(completed.state.head, '007_driver_pwa_auth_foundation');
+            assert.equal(completed.results.filter((item) => item.status === 'applied').length, 3);
         } finally {
             await client.end();
         }
@@ -281,7 +281,15 @@ test('local LogiHERO-only custom backup restores with matching counts, fingerpri
         try {
             await migrate(sourceClient);
             const company = (await sourceClient.query("INSERT INTO companies (name, slug) VALUES ('Backup Company', 'backup-company') RETURNING uuid")).rows[0];
-            await sourceClient.query("INSERT INTO drivers (company_uuid, name, created_at, updated_at) VALUES ($1, 'Backup Driver', 1, 1)", [company.uuid]);
+            const driver = (await sourceClient.query("INSERT INTO drivers (company_uuid, name, created_at, updated_at) VALUES ($1, 'Backup Driver', 1, 1) RETURNING uuid", [company.uuid])).rows[0];
+            const account = (await sourceClient.query(
+                "INSERT INTO driver_accounts (driver_uuid, username, username_normalized, password_hash, created_at, updated_at) VALUES ($1, 'backup.driver', 'backup.driver', '$argon2id$test-hash', 1, 1) RETURNING uuid",
+                [driver.uuid]
+            )).rows[0];
+            await sourceClient.query(
+                "INSERT INTO driver_web_sessions (account_uuid, token_hash, csrf_token_hash, password_version, created_at, last_seen_at, expires_at) VALUES ($1, repeat('a', 64), repeat('b', 64), 1, 1, 1, 2)",
+                [account.uuid]
+            );
         } finally {
             await sourceClient.end();
         }
@@ -293,6 +301,8 @@ test('local LogiHERO-only custom backup restores with matching counts, fingerpri
         assert.equal(restoreResult.status, 'RESTORE_OK');
         assert.equal(restoreResult.inspection.counts.companies, 1);
         assert.equal(restoreResult.inspection.counts.drivers, 1);
+        assert.equal(restoreResult.inspection.counts.driver_accounts, 1);
+        assert.equal(restoreResult.inspection.counts.driver_web_sessions, 1);
         assert.equal(restoreResult.inspection.fingerprint, backupResult.inspection.fingerprint);
     } finally {
         await dropDatabase(source.name);

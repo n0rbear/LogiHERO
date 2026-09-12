@@ -39,6 +39,8 @@ const devSeedRoutes = require('./src/routes/dev-seed.routes');
 const createAdminSaveTourRoutes = require('./src/routes/admin-save-tour.routes');
 const adminTransferTourRoutes = require('./src/routes/admin-transfer-tour.routes');
 const adminRoutes = require('./src/routes/admin.routes');
+const driverPwaRoutes = require('./src/routes/driver-pwa.routes');
+const driverPwaAdminRoutes = require('./src/routes/driver-pwa-admin.routes');
 const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
 const syncRoutes = require('./src/routes/sync.routes');
 const workTimeRoutes = require('./src/routes/work-time.routes');
@@ -75,6 +77,8 @@ app.use(healthRoutes);
 
 // Consolidated Admin UI & Protected Routes
 app.use('/admin', adminRoutes);
+app.use('/admin', driverPwaAdminRoutes);
+app.use(driverPwaRoutes);
 
 // Driver & Live Data APIs
 app.use(createLiveUpdateRoutes({ StatusEngine }));
