@@ -36,3 +36,7 @@ Current reconciliation integrated a ZIP security fix that derives a backend-only
 ### MEM-005 - Historical `.ai` claims need reclassification
 
 The ZIP claims many fixes as complete on a prior agent branch. In current `main`, only some are present. Future agents must classify each important claim as verified, partial, stale documentation, or not present.
+
+### MEM-006 - POD is a core feature and signed state is immutable
+
+Proof of Delivery / digital delivery acceptance is planned but not implemented. It is distinct from the cargo `DELIVERED` state. A future signature must cover a server-built, immutable, versioned snapshot with a content hash; any covered data change requires a new acceptance and signatures. See `docs/POD_DELIVERY_ACCEPTANCE.md`.
