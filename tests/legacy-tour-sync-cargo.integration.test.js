@@ -4,6 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const pool = require('../src/database/pool');
+const { ensurePostgres } = require('./helpers/require-postgres');
 const ImportEngine = require('../src/engines/import-engine');
 
 const DRIVER = 'TD009 Integration Driver';
@@ -48,12 +49,7 @@ async function readState(client, fixture) {
 }
 
 test('TD-009 cargo authority against real PostgreSQL', async (t) => {
-    try {
-        await pool.query('SELECT 1');
-    } catch (e) {
-        t.skip(`Local PostgreSQL unavailable: ${e.code || e.message}`);
-        return;
-    }
+    if (!await ensurePostgres(t, pool)) return;
 
     await t.test('forged cargo state cannot unlock the stop', async () => {
         const client = await pool.connect();

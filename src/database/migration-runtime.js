@@ -5,6 +5,9 @@ const path = require('node:path');
 const DEFAULT_MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const LATEST_MIGRATION_ID = '007_driver_pwa_auth_foundation';
 const MIGRATION_LOCK_KEY = '7246494845524';
+// Marks a stored checksum as covering the migration file alone. Rows without it were written by
+// the original runtime, which also hashed the declared dependency files.
+const CHECKSUM_PREFIX = 'v2:';
 
 class MigrationError extends Error {
     constructor(code, message, details = {}) {
@@ -19,10 +22,41 @@ function sha256(content) {
     return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-function migrationChecksum(filePath, migration) {
-    const files = [filePath, ...(migration.checksumFiles || []).map((file) => path.resolve(path.dirname(filePath), file))];
+function hashFiles(files) {
     const contents = files.map((file) => `${path.basename(file)}\n${fs.readFileSync(file)}`).join('\n');
     return sha256(contents);
+}
+
+function resolveDependencyFiles(filePath, migration) {
+    return (migration.checksumFiles || []).map((file) => path.resolve(path.dirname(filePath), file));
+}
+
+// A migration file is an immutable historical artifact: once it has been applied its bytes must
+// never change, and that is exactly what the stored checksum pins.
+//
+// Declared `checksumFiles` are deliberately NOT part of this hash. They point at shared, living
+// modules such as schema-contract.js, which is expected to grow every time the product gains a
+// table. Hashing them here made every future schema extension rewrite the checksum of every
+// already-applied migration that declared the dependency, so `migrate()` failed with
+// CHECKSUM_MISMATCH before it could apply the new migration. Whether the live database still
+// matches the contract is a separate question, and it is already answered directly against the
+// database by validateCanonicalSchema rather than by hashing a source file.
+function migrationChecksum(filePath) {
+    return `${CHECKSUM_PREFIX}${hashFiles([filePath])}`;
+}
+
+// Recorded at apply time as provenance, so the schema_migrations row still says which dependency
+// content the migration ran against. Never re-compared on a later boot.
+function migrationDependencyChecksum(filePath, migration) {
+    const files = resolveDependencyFiles(filePath, migration);
+    return files.length ? hashFiles(files) : null;
+}
+
+// The original algorithm, kept only to recognise rows written by the previous runtime so they can
+// be rebaselined in place exactly once. A legacy row matches only when both the migration file and
+// its dependencies are byte-identical to what was applied, so healing never hides tampering.
+function legacyMigrationChecksum(filePath, migration) {
+    return hashFiles([filePath, ...resolveDependencyFiles(filePath, migration)]);
 }
 
 function loadMigrations(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
@@ -46,7 +80,9 @@ function loadMigrations(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
             ...migration,
             filename: file,
             filePath,
-            checksum: migrationChecksum(filePath, migration)
+            checksum: migrationChecksum(filePath),
+            dependencyChecksum: migrationDependencyChecksum(filePath, migration),
+            legacyChecksum: legacyMigrationChecksum(filePath, migration)
         };
     });
 }
@@ -68,6 +104,7 @@ async function ensureMigrationTable(client) {
             filename TEXT,
             description TEXT NOT NULL DEFAULT '',
             checksum TEXT,
+            dependency_checksum TEXT,
             applied_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
             execution_ms INTEGER,
             app_commit TEXT
@@ -75,6 +112,7 @@ async function ensureMigrationTable(client) {
     `);
     await client.query("ALTER TABLE public.schema_migrations ADD COLUMN IF NOT EXISTS filename TEXT");
     await client.query("ALTER TABLE public.schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT");
+    await client.query("ALTER TABLE public.schema_migrations ADD COLUMN IF NOT EXISTS dependency_checksum TEXT");
     await client.query("ALTER TABLE public.schema_migrations ADD COLUMN IF NOT EXISTS execution_ms INTEGER");
     await client.query("ALTER TABLE public.schema_migrations ADD COLUMN IF NOT EXISTS app_commit TEXT");
     await client.query("ALTER TABLE public.schema_migrations ALTER COLUMN description SET DEFAULT ''");
@@ -92,6 +130,7 @@ async function readAppliedMigrations(client) {
         available.has('filename') ? 'filename' : 'NULL::TEXT AS filename',
         available.has('description') ? 'description' : "''::TEXT AS description",
         available.has('checksum') ? 'checksum' : 'NULL::TEXT AS checksum',
+        available.has('dependency_checksum') ? 'dependency_checksum' : 'NULL::TEXT AS dependency_checksum',
         available.has('applied_at') ? 'applied_at' : 'NULL::BIGINT AS applied_at',
         available.has('execution_ms') ? 'execution_ms' : 'NULL::INTEGER AS execution_ms',
         available.has('app_commit') ? 'app_commit' : 'NULL::TEXT AS app_commit'
@@ -105,11 +144,17 @@ function evaluateMigrationState(migrations, appliedRows, { expectedHead = LATEST
     const unknown = appliedRows.filter((row) => !knownById.has(row.id)).map((row) => row.id);
     const checksumMismatches = [];
     const metadataMissing = [];
+    const needsRebaseline = [];
     for (const migration of migrations) {
         const row = appliedById.get(migration.id);
         if (!row) continue;
         if (!row.checksum) metadataMissing.push(migration.id);
-        else if (row.checksum !== migration.checksum) checksumMismatches.push(migration.id);
+        else if (row.checksum === migration.checksum) { /* current algorithm, nothing to do */ }
+        else if (migration.legacyChecksum && row.checksum === migration.legacyChecksum) {
+            // Written by the previous runtime and still byte-identical. Valid, but the stored value
+            // is coupled to the dependency files, so it is rebaselined on the next migrate().
+            needsRebaseline.push(migration.id);
+        } else checksumMismatches.push(migration.id);
         if (row.filename && row.filename !== migration.filename) checksumMismatches.push(migration.id);
     }
     const appliedKnown = migrations.filter((migration) => appliedById.has(migration.id));
@@ -128,6 +173,7 @@ function evaluateMigrationState(migrations, appliedRows, { expectedHead = LATEST
         expectedHead,
         unknown,
         checksumMismatches: [...new Set(checksumMismatches)],
+        needsRebaseline,
         metadataMissing,
         gaps,
         pending: pending.map((migration) => migration.id),
@@ -203,9 +249,10 @@ async function migrate(client, options = {}) {
                 await client.query(
                     `UPDATE public.schema_migrations
                      SET filename = $2, description = COALESCE(NULLIF(description, ''), $3), checksum = $4,
+                         dependency_checksum = COALESCE(dependency_checksum, $6),
                          execution_ms = COALESCE(execution_ms, 0), app_commit = COALESCE(app_commit, $5)
                      WHERE id = $1 AND checksum IS NULL`,
-                    [baseline.id, baseline.filename, baseline.description, baseline.checksum, appCommit]
+                    [baseline.id, baseline.filename, baseline.description, baseline.checksum, appCommit, baseline.dependencyChecksum]
                 );
                 await client.query('COMMIT');
             } catch (error) {
@@ -214,6 +261,34 @@ async function migrate(client, options = {}) {
             }
             applied = await readAppliedMigrations(client);
             appliedById.set(baseline.id, applied.find((row) => row.id === baseline.id));
+        }
+
+        // One-time, in-place rebaseline of rows written by the previous runtime. Each row has
+        // already been proven byte-identical by evaluateMigrationState, so this only rewrites the
+        // stored value to the dependency-independent form. Running it here, before the state is
+        // asserted for the apply loop, is what lets a database that is mid-upgrade accept the next
+        // migration instead of failing closed on a checksum that a contract change moved.
+        state = evaluateMigrationState(migrations, applied, { expectedHead: selected.at(-1)?.id || LATEST_MIGRATION_ID });
+        if (state.needsRebaseline.length) {
+            const byId = new Map(migrations.map((migration) => [migration.id, migration]));
+            await client.query('BEGIN');
+            try {
+                await client.query('SET LOCAL search_path TO public, pg_catalog');
+                for (const id of state.needsRebaseline) {
+                    const migration = byId.get(id);
+                    await client.query(
+                        'UPDATE public.schema_migrations SET checksum = $2, dependency_checksum = COALESCE(dependency_checksum, $3) WHERE id = $1 AND checksum = $4',
+                        [id, migration.checksum, migration.dependencyChecksum, migration.legacyChecksum]
+                    );
+                }
+                await client.query('COMMIT');
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            }
+            applied = await readAppliedMigrations(client);
+            state = evaluateMigrationState(migrations, applied, { expectedHead: selected.at(-1)?.id || LATEST_MIGRATION_ID });
+            assertStateIsValid(state, { allowPending: true, allowLegacyBaseline: true });
         }
 
         const appliedIds = new Set(applied.map((row) => row.id));
@@ -231,9 +306,9 @@ async function migrate(client, options = {}) {
                 const executionMs = Date.now() - started;
                 await client.query(
                     `INSERT INTO public.schema_migrations
-                        (id, filename, description, checksum, applied_at, execution_ms, app_commit)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [migration.id, migration.filename, migration.description, migration.checksum, Date.now(), executionMs, appCommit]
+                        (id, filename, description, checksum, dependency_checksum, applied_at, execution_ms, app_commit)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                    [migration.id, migration.filename, migration.description, migration.checksum, migration.dependencyChecksum, Date.now(), executionMs, appCommit]
                 );
                 await client.query('COMMIT');
                 appliedIds.add(migration.id);
@@ -268,6 +343,8 @@ module.exports = {
     loadMigrations,
     migrate,
     migrationChecksum,
+    migrationDependencyChecksum,
+    legacyMigrationChecksum,
     readAppliedMigrations,
     selectTargetMigrations,
     sha256,

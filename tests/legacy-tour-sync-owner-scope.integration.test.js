@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const express = require('express');
 const pool = require('../src/database/pool');
+const { ensurePostgres } = require('./helpers/require-postgres');
 const { hashToken } = require('../src/middleware/requireDeviceAuth');
 
 const A_UUID = 'a0000000-0000-4000-8000-00000000000a';
@@ -116,12 +117,7 @@ function syncBody(fixture, { cargo, stops } = {}) {
 }
 
 test('TD-010 legacy tour sync owner scope (real PostgreSQL)', async (t) => {
-    try {
-        await pool.query('SELECT 1');
-    } catch (e) {
-        t.skip(`Local PostgreSQL unavailable: ${e.code || e.message}`);
-        return;
-    }
+    if (!await ensurePostgres(t, pool)) return;
     const app = buildApp();
 
     await t.test('Attack A: cannot mutate cargo on another driver tour', async () => {

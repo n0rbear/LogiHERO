@@ -1,15 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const pool = require('../src/database/pool');
+const { ensurePostgres } = require('./helpers/require-postgres');
 const HotelEngine = require('../src/engines/hotel-engine');
 
 test('Hotel Core - Status transitions and idempotency', async (t) => {
-    try {
-        await pool.query('SELECT 1');
-    } catch (e) {
-        t.skip(`Local PostgreSQL unavailable: ${e.code || e.message}`);
-        return;
-    }
+    if (!await ensurePostgres(t, pool)) return;
 
     // Setup: Create a test tour and hotel
     const tourRes = await pool.query("INSERT INTO tours (name, driver_name) VALUES ('Test Tour', 'Test Driver') RETURNING id");
