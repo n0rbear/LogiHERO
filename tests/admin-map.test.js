@@ -72,6 +72,23 @@ test('admin map render output creates tile, marker and route layers without exte
     assert.match(styles, /\.admin-map-route-polyline/);
 });
 
+test('admin map attribution is visible, linked, and outside refreshable layers', () => {
+    const script = renderAdminMapScript();
+    const styles = renderAdminMapStyles();
+
+    assert.match(script, /admin-map-attribution/);
+    assert.match(script, /&copy; OpenStreetMap contributors/);
+    assert.match(script, /https:\/\/www\.openstreetmap\.org\/copyright/);
+    assert.match(script, /rel="noopener noreferrer"/);
+    assert.match(styles, /\.admin-map-attribution\s*{[^}]*position:\s*absolute/s);
+    assert.match(styles, /\.admin-map-attribution\s*{[^}]*z-index:\s*4/s);
+
+    const shellAssignment = script.match(/el\.innerHTML = '([^']+)'/);
+    assert.ok(shellAssignment);
+    assert.match(shellAssignment[1], /admin-map-attribution/);
+    assert.doesNotMatch(script, /querySelector\('\.admin-map-attribution'\)\.innerHTML/);
+});
+
 test('admin map tiles keep native OSM size instead of stretching to container fractions', () => {
     const script = renderAdminMapScript();
     const styles = renderAdminMapStyles();
